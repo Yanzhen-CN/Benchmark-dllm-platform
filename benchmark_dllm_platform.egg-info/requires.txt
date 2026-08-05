@@ -1,2 +1,0 @@
-streamlit<2,>=1.39
-pyyaml>=6.0

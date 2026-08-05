@@ -1,7 +1,0 @@
-Matrix: C:\Users\whaletech002\Desktop\whaletech\Benchmark\Benchmark-dllm\configs\experiments\full_matrix.yaml
-Local stage: visualize
-Models: diffusiongemma
-[1/1] diffusiongemma: C:\Users\whaletech002\Desktop\whaletech\Benchmark\Benchmark-dllm\.venvs\root\Scripts\python.exe -m dllm_bench.cli matrix --experiment-config C:\Users\whaletech002\Desktop\whaletech\Benchmark\Benchmark-dllm\configs\experiments\full_matrix.yaml --model diffusiongemma --stage visualize --no-demo --output-root output/model_output --n-representative 0 --visualization-scope sample --sample-ids sudoku4-d1-0004 --variants official --dataset sudoku4_1shot
-Matrix contains 1 model x dataset jobs
-[1/1] diffusiongemma.yaml x sudoku4_1shot.yaml
-[official] rendered 1 sample(s) -> output\visualization_output\diffusiongemma\official\sudoku4_1shot
