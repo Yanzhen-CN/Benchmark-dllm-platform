@@ -5,18 +5,21 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from platform_core.results import load_sample_scores, load_trace_assets
 from platform_core.maintenance import (
     list_trash_entries,
     move_output_paths_to_trash,
     restore_trash_entry,
 )
-from platform_core.selection import select_single_dataset
-from platform_core.visualization import (
-    child_directories,
-    launch_visualization,
-    sample_ids,
-    trace_command,
+from platform_core.results import (
+    load_sample_scores,
+    load_trace_assets,
+    load_trace_summary_records,
+)
+from platform_core.selection import (
+    dataset_label,
+    select_dataset_subsets,
+    select_model_variants,
+    select_single_dataset,
 )
 from platform_core.ui import (
     configure_page,
@@ -24,6 +27,12 @@ from platform_core.ui import (
     paths_sidebar,
     require_ready,
     zoomable_image,
+)
+from platform_core.visualization import (
+    child_directories,
+    launch_visualization,
+    sample_ids,
+    trace_command,
 )
 
 
@@ -34,14 +43,46 @@ require_ready(paths)
 st.title("Trace")
 
 model_output_root = paths.output_root / "model_output"
+
+
+def trace_type(asset: dict) -> str:
+    name = asset["name"]
+    if name.endswith("_block_acceptance.png"):
+        return "Block 内接受顺序"
+    if name.endswith("_accept_trace.png"):
+        return "Accept 更新"
+    if name.endswith("_all_updates.png"):
+        return "全部更新"
+    if name.endswith("_sudoku_context_trace.gif"):
+        return "数独生成动图"
+    if asset["suffix"] == ".csv":
+        return "逐步数据"
+    return asset["kind"]
+
+
+def score_marker(score: float | None) -> str:
+    if score is None:
+        return "⚪"
+    if score >= 0.8:
+        return "🟢"
+    if score >= 0.5:
+        return "🟡"
+    return "🔴"
+
+
 def trashed_trace_entries(run_name: str, dataset_name: str, sample_name: str):
     prefix = f"visualization_output/{run_name}/{dataset_name}/".lower()
     sample_prefix = f"{sample_name}_".lower()
     return [
         entry
         for entry in list_trash_entries(paths.output_root)
-        if str(entry.get("original_relative_path", "")).replace("\\", "/").lower().startswith(prefix)
-        and Path(str(entry.get("original_relative_path", ""))).name.lower().startswith(sample_prefix)
+        if str(entry.get("original_relative_path", ""))
+        .replace("\\", "/")
+        .lower()
+        .startswith(prefix)
+        and Path(str(entry.get("original_relative_path", "")))
+        .name.lower()
+        .startswith(sample_prefix)
     ]
 
 
@@ -60,71 +101,407 @@ def confirm_trace_delete(asset_paths: list[Path]) -> None:
         move_output_paths_to_trash(paths.output_root, asset_paths)
         st.rerun()
 
+
 assets = load_trace_assets(paths.output_root)
-mode_options = ["单样本轨迹"]
-if any(asset["scope"] == "模型对比" for asset in assets):
-    mode_options.insert(0, "模型对比")
+sample_trace_assets = [asset for asset in assets if asset["scope"] == "单样本轨迹"]
+trace_summary_records = load_trace_summary_records(paths.output_root)
 mode = st.radio(
     "查看方式",
-    mode_options,
+    ["模型对比", "单样本轨迹"],
     horizontal=True,
 )
-mode_assets = [asset for asset in assets if asset["scope"] == mode]
+
+
+trace_process = st.session_state.get("trace_visualization_process")
+if trace_process is not None:
+
+    @st.fragment(run_every=1.0)
+    def poll_trace_generation() -> None:
+        process = st.session_state.get("trace_visualization_process")
+        if process is None:
+            return
+        return_code = process.poll()
+        if return_code is None:
+            label = st.session_state.get("trace_visualization_label", "Trace")
+            st.info(f"正在生成 {label}，完成后会自动刷新。")
+            return
+
+        trace_log = st.session_state.get("trace_visualization_log")
+        log_lines = []
+        if trace_log:
+            try:
+                log_lines = Path(trace_log).read_text(
+                    encoding="utf-8",
+                    errors="replace",
+                ).splitlines()
+            except OSError:
+                pass
+        st.session_state.pop("trace_visualization_process", None)
+        st.session_state.pop("trace_visualization_log", None)
+        st.session_state.pop("trace_visualization_label", None)
+        if return_code == 0:
+            st.session_state.pop("trace_visualization_failure", None)
+        else:
+            st.session_state["trace_visualization_failure"] = {
+                "return_code": return_code,
+                "log_lines": log_lines[-30:],
+            }
+        st.rerun()
+
+    poll_trace_generation()
+
+trace_failure = st.session_state.get("trace_visualization_failure")
+if trace_failure:
+    st.error(f"生成失败，退出码：{trace_failure['return_code']}")
+    if trace_failure["log_lines"]:
+        with st.expander("生成日志", expanded=True):
+            st.code("\n".join(trace_failure["log_lines"]), language="text")
+    if st.button("关闭日志", key="dismiss_trace_failure"):
+        st.session_state.pop("trace_visualization_failure", None)
+        st.rerun()
+
 
 if mode == "模型对比":
-    model_options = sorted({asset["model"] for asset in mode_assets})
-    model_name = st.selectbox("模型", model_options)
-    model_assets = [asset for asset in mode_assets if asset["model"] == model_name]
-    dataset_name = select_single_dataset(
-        {asset["dataset"] for asset in model_assets},
-        key_prefix="trace_comparison",
-    )
-    selected = [asset for asset in model_assets if asset["dataset"] == dataset_name]
+    raw_run_records = [
+        {
+            "model": model,
+            "config": variant,
+            "run": f"{model}/{variant}",
+        }
+        for model in child_directories(model_output_root)
+        for variant in child_directories(model_output_root / model)
+    ]
+    if not raw_run_records:
+        st.info("model_output 中没有可比较的运行。")
+        st.stop()
 
-    if selected:
-        delete_column, _ = st.columns([1, 7])
-        if delete_column.button("Delete", key="delete_trace_comparison"):
-            confirm_trace_delete([asset["path"] for asset in selected])
+    report_trace_runs = [
+        run
+        for run in (
+            "dreamreasoner/p2",
+            "illada/p2",
+            "illada_vargen/p2",
+            "illada_entropy/eb05",
+        )
+        if any(record["run"] == run for record in raw_run_records)
+    ]
+    if not report_trace_runs:
+        report_trace_runs = [record["run"] for record in raw_run_records[:3]]
 
-    image_assets = [asset for asset in selected if asset["suffix"] == ".png"]
-    kind_order = {
-        "Accept trace": 0,
-        "Forward 效率": 1,
-        "首次接受": 2,
-        "位置状态": 3,
-        "逐步接受": 4,
-        "答案区域": 5,
-        "Trace": 6,
+    metric_labels = {
+        "block_local_tau": "Block 内接受顺序 τ",
+        "accepted_tokens_per_forward": "每次 Forward 接受 token",
+        "final_stable_tokens_per_forward": "每次 Forward 最终稳定 token",
+        "accepted_tps": "接受 TPS",
     }
-    image_assets.sort(key=lambda asset: kind_order.get(asset["kind"], 20))
-    if image_assets:
-        labels = [f"{asset['kind']} · {asset['name']}" for asset in image_assets]
-        selected_label = st.selectbox("图表", labels)
-        selected_image = image_assets[labels.index(selected_label)]
-        zoomable_image(
-            selected_image["path"],
-            caption=selected_image["kind"],
+    with st.expander("选择模型、变体、数据集和 Trace 指标", expanded=True):
+        selected_runs = select_model_variants(
+            raw_run_records,
+            default_runs=report_trace_runs,
+            key_prefix="trace_comparison",
+        )
+        available_datasets = sorted(
+            {
+                dataset
+                for run in selected_runs
+                for dataset in child_directories(
+                    model_output_root
+                    / run.partition("/")[0]
+                    / run.partition("/")[2]
+                )
+            }
+        )
+        default_trace_dataset = (
+            "gsm8k"
+            if "gsm8k" in available_datasets
+            else "sudoku4_1shot"
+            if "sudoku4_1shot" in available_datasets
+            else available_datasets[0]
+            if available_datasets
+            else ""
+        )
+        selected_datasets = select_dataset_subsets(
+            available_datasets,
+            default_datasets=(default_trace_dataset,),
+            key_prefix="trace_comparison",
+        )
+        available_metrics = list(metric_labels)
+        selected_metrics = st.multiselect(
+            "Trace 指标",
+            available_metrics,
+            default=[
+                metric
+                for metric in (
+                    "block_local_tau",
+                    "accepted_tokens_per_forward",
+                )
+                if metric in available_metrics
+            ]
+            or available_metrics[:1],
+            format_func=metric_labels.get,
+            key="trace_comparison_metrics",
         )
 
-    csv_assets = [asset for asset in selected if asset["suffix"] == ".csv"]
-    if csv_assets:
-        with st.expander("逐步数据"):
-            for asset in csv_assets:
-                st.caption(asset["name"])
-                try:
-                    frame = pd.read_csv(asset["path"])
-                except (OSError, pd.errors.ParserError) as exc:
-                    st.error(f"无法读取 {asset['name']}: {exc}")
-                else:
-                    st.dataframe(frame, width="stretch", hide_index=True)
+    if not selected_runs or not selected_datasets:
+        st.info("请选择模型和数据集。")
+        st.stop()
+
+    selected_summaries = [
+        record
+        for record in trace_summary_records
+        if record["run"] in selected_runs
+        and record["dataset"] in selected_datasets
+    ]
+    summary_lookup = {
+        (record["run"], record["dataset"]): record
+        for record in selected_summaries
+    }
+    compact_rows = []
+    for run in selected_runs:
+        for dataset_name in selected_datasets:
+            record = summary_lookup.get((run, dataset_name))
+            metrics = record["metrics"] if record else {}
+            row = {
+                "模型 / 配置": run,
+                "数据集": dataset_label(dataset_name),
+            }
+            for metric in selected_metrics:
+                row[metric_labels[metric]] = metrics.get(metric)
+            compact_rows.append(row)
+    if compact_rows:
+        compact_frame = pd.DataFrame(compact_rows)
+        st.dataframe(
+            compact_frame,
+            width="stretch",
+            hide_index=True,
+            height=min(250, 36 * (len(compact_frame) + 1) + 4),
+            column_config={
+                "Block 内接受顺序 τ": st.column_config.NumberColumn(format="%.3f"),
+                "每次 Forward 接受 token": st.column_config.NumberColumn(format="%.2f"),
+                "每次 Forward 最终稳定 token": st.column_config.NumberColumn(format="%.2f"),
+                "接受 TPS": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+        if "block_local_tau" in selected_metrics:
+            st.caption(
+                "τ 越接近 1，block 内越倾向按位置从左到右稳定；"
+                "接近 0 表示接受顺序与位置关系弱。"
+            )
+    else:
+        st.warning("所选结果没有对应的 Trace 指标记录。")
+
+    tau_by_run_dataset = {
+        key: record["metrics"].get("block_local_tau")
+        for key, record in summary_lookup.items()
+    }
+
+    comparison_assets = [
+        asset
+        for asset in sample_trace_assets
+        if asset["model"] in selected_runs
+        and asset["dataset"] in selected_datasets
+    ]
+    if not comparison_assets:
+        st.caption("原始 Trace 已记录，但当前选择还没有生成单样本图片。")
+
+    st.subheader("真实 Trace 对比")
+    available_types = sorted({trace_type(asset) for asset in comparison_assets}) or [
+        "Accept 更新"
+    ]
+    default_types = [
+        name
+        for name in ("Block 内接受顺序", "Accept 更新")
+        if name in available_types
+    ]
+    trace_control, trace_note = st.columns([2, 3], vertical_alignment="bottom")
+    with trace_control:
+        selected_types = st.multiselect(
+            "Trace 图",
+            available_types,
+            default=default_types or available_types[:1],
+            key="trace_comparison_types",
+        )
+    with trace_note:
+        st.caption("图像使用同一数据集、同一样本并排展示；τ 来自该运行的数据集级汇总。")
+
+    if not selected_types:
+        st.stop()
+
+    for dataset_name in selected_datasets:
+        dataset_all_assets = [
+            asset
+            for asset in comparison_assets
+            if asset["dataset"] == dataset_name
+        ]
+        dataset_assets = [
+            asset
+            for asset in dataset_all_assets
+            if trace_type(asset) in selected_types
+        ]
+        samples_by_run = {
+            run: set(
+                sample_ids(
+                    model_output_root
+                    / run.partition("/")[0]
+                    / run.partition("/")[2]
+                    / dataset_name
+                )
+            )
+            for run in selected_runs
+        }
+        nonempty_sample_sets = [samples for samples in samples_by_run.values() if samples]
+        if not nonempty_sample_sets:
+            st.warning(f"{dataset_label(dataset_name)} 没有原始模型输出。")
+            continue
+        common_samples = sorted(set.intersection(*nonempty_sample_sets))
+        sample_options = common_samples or sorted(set.union(*nonempty_sample_sets))
+
+        score_maps = {
+            run: {
+                record["sample"]: record["metrics"].get("primary_score")
+                for record in load_sample_scores(paths.output_root, run, dataset_name)
+            }
+            for run in selected_runs
+        }
+
+        def comparison_sample_label(sample_id: str) -> str:
+            scores = [
+                score_maps[run].get(sample_id)
+                for run in selected_runs
+                if score_maps[run].get(sample_id) is not None
+            ]
+            average = sum(scores) / len(scores) if scores else None
+            coverage = sum(sample_id in samples_by_run[run] for run in selected_runs)
+            score_text = "未评分" if average is None else f"均分 {average:.3f}"
+            return (
+                f"{score_marker(average)} {score_text} · "
+                f"{coverage}/{len(selected_runs)} 个运行 · {sample_id}"
+            )
+
+        st.subheader(dataset_label(dataset_name))
+        if not common_samples and len(selected_runs) > 1:
+            st.caption("所选运行没有完全相同的 Trace 样本；缺失位置会保留为空。")
+        sample_name = st.selectbox(
+            "样本",
+            sample_options,
+            format_func=comparison_sample_label,
+            key=f"trace_comparison_sample_{dataset_name}",
+        )
+
+        for start in range(0, len(selected_runs), 2):
+            row_runs = selected_runs[start : start + 2]
+            columns = st.columns(len(row_runs))
+            for column, run in zip(columns, row_runs):
+                with column:
+                    score = score_maps[run].get(sample_name)
+                    tau = tau_by_run_dataset.get((run, dataset_name))
+                    tau_text = "N/A" if tau is None else f"{tau:.3f}"
+                    score_text = "未评分" if score is None else f"主分 {score:.4f}"
+                    st.markdown(f"**{run}** · `τ = {tau_text}`")
+                    st.caption(score_text)
+                    all_run_assets = [
+                        asset
+                        for asset in dataset_all_assets
+                        if asset["model"] == run and asset["sample"] == sample_name
+                    ]
+                    run_assets = [
+                        asset
+                        for asset in dataset_assets
+                        if asset["model"] == run and asset["sample"] == sample_name
+                    ]
+                    recycled_assets = trashed_trace_entries(
+                        run,
+                        dataset_name,
+                        sample_name,
+                    )
+                    action_left, action_right = st.columns(2)
+                    if all_run_assets:
+                        if action_left.button(
+                            "Delete",
+                            key=f"delete_comparison_{run}_{dataset_name}_{sample_name}",
+                            use_container_width=True,
+                        ):
+                            confirm_trace_delete(
+                                [asset["path"] for asset in all_run_assets]
+                            )
+                    elif recycled_assets:
+                        if action_left.button(
+                            "Restore",
+                            key=f"restore_comparison_{run}_{dataset_name}_{sample_name}",
+                            use_container_width=True,
+                        ):
+                            restored = 0
+                            for entry in recycled_assets:
+                                try:
+                                    restore_trash_entry(paths.output_root, entry["id"])
+                                except FileExistsError:
+                                    continue
+                                else:
+                                    restored += 1
+                            if restored:
+                                st.rerun()
+
+                    needs_generation = (
+                        not all_run_assets and not recycled_assets
+                    ) or (bool(all_run_assets) and not run_assets)
+                    if needs_generation:
+                        model, _, variant = run.partition("/")
+                        if action_right.button(
+                            "Generate",
+                            key=f"generate_comparison_{run}_{dataset_name}_{sample_name}",
+                            use_container_width=True,
+                            disabled=st.session_state.get(
+                                "trace_visualization_process"
+                            )
+                            is not None,
+                        ):
+                            command = trace_command(
+                                paths,
+                                model=model,
+                                variant=variant,
+                                dataset=dataset_name,
+                                sample=sample_name,
+                            )
+                            process, log_path = launch_visualization(paths, command)
+                            st.session_state.pop("trace_visualization_failure", None)
+                            st.session_state["trace_visualization_process"] = process
+                            st.session_state["trace_visualization_log"] = str(log_path)
+                            st.session_state["trace_visualization_label"] = (
+                                f"{run} · {dataset_name} · {sample_name}"
+                            )
+                            st.rerun()
+
+                    if not all_run_assets:
+                        message = (
+                            "图片在回收站中，可先 Restore。"
+                            if recycled_assets
+                            else "原始 Trace 已记录，尚未生成图片。"
+                        )
+                        st.info(message)
+                        continue
+                    if not run_assets:
+                        st.info("已有其他 Trace 图片，但所选图尚未生成。")
+                        continue
+                    run_assets.sort(
+                        key=lambda asset: selected_types.index(trace_type(asset))
+                    )
+                    for asset in run_assets:
+                        if asset["suffix"] == ".gif":
+                            pausable_gif(asset["path"], caption=trace_type(asset))
+                        elif asset["suffix"] == ".png":
+                            zoomable_image(asset["path"], caption=trace_type(asset))
+                        elif asset["suffix"] == ".csv":
+                            try:
+                                frame = pd.read_csv(asset["path"])
+                            except (OSError, pd.errors.ParserError) as exc:
+                                st.error(f"无法读取 {asset['name']}：{exc}")
+                            else:
+                                st.dataframe(frame, width="stretch", hide_index=True)
+
 
 else:
     source_entries = [
-        {
-            "model": model,
-            "variant": variant,
-            "run": f"{model}/{variant}",
-        }
+        {"model": model, "variant": variant, "run": f"{model}/{variant}"}
         for model in child_directories(model_output_root)
         for variant in child_directories(model_output_root / model)
     ]
@@ -153,6 +530,11 @@ else:
         source_variant = st.selectbox(
             "变体 / 运行",
             source_variants,
+            index=(
+                source_variants.index("official")
+                if "official" in source_variants
+                else 0
+            ),
             key="trace_sample_variant",
         )
         run_name = f"{source_model}/{source_variant}"
@@ -163,6 +545,7 @@ else:
         dataset_name = select_single_dataset(
             source_datasets,
             key_prefix="trace_sample",
+            default_dataset="sudoku4_1shot",
         )
         if dataset_name is None:
             st.info("当前模型变体没有可用数据集。")
@@ -182,19 +565,19 @@ else:
 
         def sample_label(sample_id: str) -> str:
             score = scores_by_sample.get(sample_id)
-            if score is None:
-                return f"⚪ 未评分 · {sample_id}"
-            if score >= 0.8:
-                marker = "🟢"
-            elif score >= 0.5:
-                marker = "🟡"
-            else:
-                marker = "🔴"
-            return f"{marker} {score:.3f} · {sample_id}"
+            score_text = "未评分" if score is None else f"{score:.3f}"
+            return f"{score_marker(score)} {score_text} · {sample_id}"
 
+        report_sample = "sudoku4-d1-0004"
         sample_name = st.selectbox(
             "样本",
             available_samples,
+            index=(
+                available_samples.index(report_sample)
+                if dataset_name == "sudoku4_1shot"
+                and report_sample in available_samples
+                else 0
+            ),
             key="trace_sample_id",
             format_func=sample_label,
         )
@@ -216,11 +599,11 @@ else:
                 unsafe_allow_html=True,
             )
             st.caption("绿色 ≥ 0.8，黄色 ≥ 0.5，红色 < 0.5。")
+
     sample_assets = [
         asset
-        for asset in assets
-        if asset["scope"] == "单样本轨迹"
-        and asset["model"] == run_name
+        for asset in sample_trace_assets
+        if asset["model"] == run_name
         and asset["dataset"] == dataset_name
         and asset["sample"] == sample_name
     ]
@@ -255,51 +638,9 @@ else:
             st.session_state.pop("trace_visualization_failure", None)
             st.session_state["trace_visualization_process"] = process
             st.session_state["trace_visualization_log"] = str(log_path)
-            st.rerun()
-
-    trace_process = st.session_state.get("trace_visualization_process")
-    if trace_process is not None:
-        @st.fragment(run_every=1.0)
-        def poll_trace_generation() -> None:
-            process = st.session_state.get("trace_visualization_process")
-            if process is None:
-                return
-            return_code = process.poll()
-            if return_code is None:
-                st.info("正在生成 Trace 图片，完成后会自动刷新。")
-                return
-
-            trace_log = st.session_state.get("trace_visualization_log")
-            log_lines = []
-            if trace_log:
-                try:
-                    log_lines = Path(trace_log).read_text(
-                        encoding="utf-8",
-                        errors="replace",
-                    ).splitlines()
-                except OSError:
-                    pass
-            st.session_state.pop("trace_visualization_process", None)
-            st.session_state.pop("trace_visualization_log", None)
-            if return_code == 0:
-                st.session_state.pop("trace_visualization_failure", None)
-            else:
-                st.session_state["trace_visualization_failure"] = {
-                    "return_code": return_code,
-                    "log_lines": log_lines[-30:],
-                }
-            st.rerun()
-
-        poll_trace_generation()
-
-    trace_failure = st.session_state.get("trace_visualization_failure")
-    if trace_failure:
-        st.error(f"生成失败，退出码：{trace_failure['return_code']}")
-        if trace_failure["log_lines"]:
-            with st.expander("生成日志", expanded=True):
-                st.code("\n".join(trace_failure["log_lines"]), language="text")
-        if st.button("关闭日志", key="dismiss_trace_failure"):
-            st.session_state.pop("trace_visualization_failure", None)
+            st.session_state["trace_visualization_label"] = (
+                f"{run_name} · {dataset_name} · {sample_name}"
+            )
             st.rerun()
 
     gif_assets = [asset for asset in sample_assets if asset["suffix"] == ".gif"]
@@ -308,18 +649,14 @@ else:
     with left:
         st.subheader("生成过程")
         if gif_assets:
-            pausable_gif(
-                gif_assets[0]["path"],
-                caption="答案区域动图",
-            )
+            for asset in gif_assets:
+                pausable_gif(asset["path"], caption="答案区域动图")
         else:
             st.info("该样本没有生成动图。")
     with right:
         st.subheader("关键更新")
         if image_assets:
-            zoomable_image(
-                image_assets[0]["path"],
-                caption="Accept 与修改",
-            )
+            for asset in image_assets:
+                zoomable_image(asset["path"], caption=trace_type(asset))
         else:
-            st.info("该样本没有关键帧图。")
+            st.info("该样本没有关键更新图。")

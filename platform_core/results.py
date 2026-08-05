@@ -335,6 +335,7 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
 
     comparison_files = {
         "accept_trace.png",
+        "block_local_tau_comparison.png",
         "forward_efficiency.png",
         "trace_first_accept.png",
         "trace_position_state.png",
@@ -345,6 +346,7 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
     sample_suffixes = (
         "_accept_trace.png",
         "_all_updates.png",
+        "_block_acceptance.png",
         "_sudoku_context_trace.gif",
     )
 
@@ -390,6 +392,56 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
             }
         )
     return assets
+
+
+def load_trace_summary_records(output_root: Path) -> list[dict[str, Any]]:
+    """Load public dataset-level trace summaries for interactive comparison."""
+    visual_root = output_root / "visualization_output"
+    records: list[dict[str, Any]] = []
+    if not visual_root.is_dir():
+        return records
+
+    for path in sorted(visual_root.rglob("dataset_trace_summary.json")):
+        data = _read_json(path)
+        if not data:
+            continue
+        relative = path.relative_to(visual_root)
+        if len(relative.parts) < 4:
+            continue
+        model = str(data.get("model") or relative.parts[0])
+        config = str(data.get("config") or relative.parts[1])
+        dataset = str(data.get("dataset") or relative.parts[2])
+        block_tau = data.get("block_local_commit_order_tau")
+        block_tau_overall = (
+            block_tau.get("overall")
+            if isinstance(block_tau, dict)
+            and isinstance(block_tau.get("overall"), dict)
+            else {}
+        )
+        stable_per_forward = data.get("mean_final_stable_tokens_per_forward")
+        if isinstance(stable_per_forward, dict):
+            stable_per_forward = stable_per_forward.get("mean")
+        metrics = {
+            "block_local_tau": block_tau_overall.get("mean"),
+            "accepted_tokens_per_forward": data.get("accepted_tokens_per_forward"),
+            "final_stable_tokens_per_forward": stable_per_forward,
+            "accepted_tps": data.get("accepted_tps"),
+        }
+        records.append(
+            {
+                "run": f"{model}/{config}",
+                "model": model,
+                "config": config,
+                "dataset": dataset,
+                "metrics": {
+                    name: float(value)
+                    for name, value in metrics.items()
+                    if _is_number(value)
+                },
+                "path": path,
+            }
+        )
+    return records
 
 
 def load_profiling_assets(output_root: Path) -> list[dict[str, Any]]:

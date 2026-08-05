@@ -58,9 +58,9 @@ def _default_sudoku(children: list[str], defaults: set[str]) -> list[str]:
     if selected:
         visible_defaults = [name for name in selected if name != "sudoku9_1shot"]
         return visible_defaults or selected[:1]
-    one_shot = [name for name in children if name.endswith("_1shot")]
-    if "sudoku4_1shot" in one_shot:
+    if "sudoku4_1shot" in children:
         return ["sudoku4_1shot"]
+    one_shot = [name for name in children if name.endswith("_1shot")]
     return one_shot[:1] or children[:1]
 
 
@@ -108,7 +108,7 @@ def select_dataset_subsets(
                 default=_default_sudoku(sudoku, defaults),
                 format_func=dataset_label,
                 key=f"{key_prefix}_sudoku_subsets",
-                help="六个子集分别使用独立 prompt、预算和评分结果。",
+                help="每个子集使用独立的 prompt、预算和评分结果。",
             )
         )
     return selected
@@ -160,7 +160,7 @@ def select_run_datasets(
                 default=_default_sudoku(sudoku, set()),
                 format_func=dataset_label,
                 key=f"{key_prefix}_sudoku_subsets",
-                help="默认选择 4x4 与 9x9 的 1-shot 子集。",
+                help="默认选择 4x4 · 1-shot。",
             )
         )
     return selected, lengths
@@ -204,7 +204,10 @@ def select_single_dataset(
             key=f"{key_prefix}_hellobench_subset",
         )
     if parent == "Sudoku":
-        default_children = _default_sudoku(sudoku, {default_dataset} if default_dataset else set())
+        default_children = _default_sudoku(
+            sudoku,
+            {default_dataset} if default_dataset else set(),
+        )
         child = default_children[0]
         return st.selectbox(
             "Sudoku 子集",
@@ -265,6 +268,7 @@ def select_model_variants(
             "dreamreasoner": "DreamReasoner",
             "illada": "iLLaDA",
             "illada_vargen": "iLLaDA-VarGen",
+            "llada2_1": "LLaDA2.1",
         }.get(record["model"], record["model"])
         return f"{model} / {record['config']}"
 
