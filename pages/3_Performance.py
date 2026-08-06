@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from platform_core.adjustment import adjustment_rows, average_power
 from platform_core.compare import render_comparison
 from platform_core.profiling import load_profiling_detail_records
 from platform_core.results import (
@@ -63,19 +64,141 @@ def render_plotly(figure, *, key: str, legend_title: str = "模型") -> None:
     )
 
 
-def average_power(record):
-    metrics = record["performance_metrics"]
-    if metrics.get("eps") is not None:
-        return metrics["eps"]
-    energy = metrics.get("energy_per_sample")
-    elapsed = metrics.get("time_per_sample")
-    if energy is not None and elapsed:
-        return energy / elapsed
-    total_energy = metrics.get("total_energy_joules")
-    total_time = metrics.get("total_time_seconds")
-    if total_energy is not None and total_time:
-        return total_energy / total_time
-    return None
+ADJUSTMENT_PAIRS = (
+    {
+        "title": "DiffusionGemma vs Gemma AR",
+        "base_run": "gemma_ar-baseline",
+        "base_label": "Gemma AR（基线）",
+        "target_run": "diffusiongemma_official",
+        "target_label": "DiffusionGemma（折算对象）",
+        "key": "dg_gemma",
+    },
+    {
+        "title": "iLLaDA entropy-eb05 vs iLLaDA P2",
+        "base_run": "illada_p2",
+        "base_label": "iLLaDA P2（基线）",
+        "target_run": "illada_entropy_eb05",
+        "target_label": "iLLaDA entropy-eb05（折算对象）",
+        "key": "illada_eb05_p2",
+    },
+)
+
+
+def render_adjustment_pair(records, pair, *, beta: float, gamma: float) -> None:
+    base_run = pair["base_run"]
+    target_run = pair["target_run"]
+    run_datasets = {
+        run: {record["dataset"] for record in records if record["run"] == run}
+        for run in (base_run, target_run)
+    }
+    common_datasets = sorted(run_datasets[base_run] & run_datasets[target_run])
+
+    st.markdown(f"### {pair['title']}")
+    st.caption(
+        f"基线：{pair['base_label']}；折算对象：{pair['target_label']}。"
+        "只在二者具有相同数据集、正式主分、时间和功率记录时计算。"
+    )
+    if not common_datasets:
+        st.info("这组对比目前没有共同且完整的数据集结果。")
+        return
+
+    selected_datasets = select_dataset_subsets(
+        common_datasets,
+        default_datasets=(
+            ["gsm8k"] if "gsm8k" in common_datasets else common_datasets[:1]
+        ),
+        key_prefix=f"adjusted_{pair['key']}",
+    )
+    if not selected_datasets:
+        st.info("请选择至少一个数据集。")
+        return
+
+    rows, missing = adjustment_rows(
+        records,
+        base_run=base_run,
+        target_run=target_run,
+        selected_datasets=selected_datasets,
+        beta=beta,
+        gamma=gamma,
+    )
+    if missing:
+        st.warning("缺少完整资源记录，未参与折算：" + "、".join(missing))
+    if not rows:
+        return
+
+    raw_rows = []
+    adjusted_rows = []
+    for row in rows:
+        raw_rows.extend(
+            [
+                {
+                    "数据集": row["数据集"],
+                    "模型": pair["base_label"],
+                    "分数": row["基线原始分数"],
+                },
+                {
+                    "数据集": row["数据集"],
+                    "模型": pair["target_label"],
+                    "分数": row["目标原始分数"],
+                },
+            ]
+        )
+        adjusted_rows.extend(
+            [
+                {
+                    "数据集": row["数据集"],
+                    "模型": pair["base_label"],
+                    "分数": row["基线原始分数"],
+                },
+                {
+                    "数据集": row["数据集"],
+                    "模型": pair["target_label"],
+                    "分数": row["目标折算指数"],
+                },
+            ]
+        )
+
+    chart_columns = st.columns(2)
+    color_map = {
+        pair["base_label"]: "#52796f",
+        pair["target_label"]: "#e76f51",
+    }
+    raw_figure = px.bar(
+        pd.DataFrame(raw_rows),
+        x="数据集",
+        y="分数",
+        color="模型",
+        barmode="group",
+        title="原始分数（正式结果）",
+        text_auto=".4g",
+        color_discrete_map=color_map,
+    )
+    raw_figure.update_traces(textposition="outside", cliponaxis=False)
+    raw_figure.update_layout(height=360, yaxis_title="分数")
+    with chart_columns[0]:
+        render_plotly(raw_figure, key=f"{pair['key']}_raw_score")
+
+    adjusted_figure = px.bar(
+        pd.DataFrame(adjusted_rows),
+        x="数据集",
+        y="分数",
+        color="模型",
+        barmode="group",
+        title="资源折算敏感性指数（非正式分数）",
+        text_auto=".4g",
+        color_discrete_map=color_map,
+    )
+    adjusted_figure.update_traces(textposition="outside", cliponaxis=False)
+    adjusted_figure.update_layout(height=360, yaxis_title="分数")
+    with chart_columns[1]:
+        render_plotly(adjusted_figure, key=f"{pair['key']}_adjusted_score")
+
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.caption(
+        "“目标速度 / 基线速度”大于 1 表示折算对象更快；"
+        "“基线功率 / 目标功率”大于 1 表示折算对象平均功率更低。"
+        "折算指数不截断到 0–1，因此可能超过 1；它不能作为准确率解读。"
+    )
 
 
 records = load_summary_records(paths.output_root)
@@ -164,6 +287,9 @@ with raw_tab:
 
 
 with adjusted_tab:
+    st.warning(
+        "资源折算是敏感性分析，不是 benchmark 正式分数。正式结论应使用左侧原始分数。"
+    )
     eligible_adjusted_records = [
         record
         for record in records
@@ -171,241 +297,44 @@ with adjusted_tab:
         and record["performance_metrics"].get("time_per_sample")
         and average_power(record) is not None
     ]
-    run_names = sorted({record["run"] for record in eligible_adjusted_records})
-    run_records = {}
-    for record in eligible_adjusted_records:
-        run_records.setdefault(record["run"], record)
-    model_names = sorted({record["model"] for record in run_records.values()})
-    base_run = None
-    target_run = None
-    if len(run_names) >= 2:
-        choose_left, choose_right = st.columns(2)
-        default_base_model = (
-            run_records["gemma_ar-baseline"]["model"]
-            if "gemma_ar-baseline" in run_records
-            else model_names[0]
-        )
-        default_target_model = (
-            run_records["diffusiongemma_official"]["model"]
-            if "diffusiongemma_official" in run_records
-            else model_names[min(1, len(model_names) - 1)]
-        )
-        with choose_left:
-            base_model = st.selectbox(
-                "基线模型",
-                model_names,
-                index=model_names.index(default_base_model),
-                key="adjusted_base_model",
-            )
-            base_run_options = [
-                run
-                for run in run_names
-                if run_records[run]["model"] == base_model
-            ]
-            base_default = (
-                base_run_options.index("gemma_ar-baseline")
-                if "gemma_ar-baseline" in base_run_options
-                else 0
-            )
-            base_run = st.selectbox(
-                "基线变体",
-                base_run_options,
-                index=base_default,
-                format_func=lambda run: run_records[run]["config"],
-                key="adjusted_base_run",
-            )
-        with choose_right:
-            target_model = st.selectbox(
-                "折算模型",
-                model_names,
-                index=model_names.index(default_target_model),
-                key="adjusted_target_model",
-            )
-            target_run_options = [
-                run
-                for run in run_names
-                if run_records[run]["model"] == target_model
-            ]
-            target_default = (
-                target_run_options.index("diffusiongemma_official")
-                if "diffusiongemma_official" in target_run_options
-                else 0
-            )
-            target_run = st.selectbox(
-                "折算变体",
-                target_run_options,
-                index=target_default,
-                format_func=lambda run: run_records[run]["config"],
-                key="adjusted_target_run",
-            )
-
-    runs_by_dataset = {}
-    for record in eligible_adjusted_records:
-        runs_by_dataset.setdefault(record["dataset"], set()).add(record["run"])
-    adjusted_datasets = sorted(
-        dataset_name
-        for dataset_name, available_runs in runs_by_dataset.items()
-        if base_run in available_runs and target_run in available_runs
+    parameter_left, parameter_right = st.columns(2)
+    beta_percent = parameter_left.slider(
+        "beta · 资源影响",
+        0,
+        100,
+        50,
+        1,
+        format="%d%%",
+        help="控制资源差异对诊断性折算结果的整体影响。",
     )
-    selected_adjusted_datasets = select_dataset_subsets(
-        adjusted_datasets,
-        default_datasets=["gsm8k"] if "gsm8k" in adjusted_datasets else adjusted_datasets[:1],
-        key_prefix="adjusted",
+    gamma_percent = parameter_right.slider(
+        "gamma · 功率权重",
+        0,
+        100,
+        50,
+        1,
+        format="%d%%",
+        help="越高越看重平均功率，越低越看重单样本速度。",
     )
-    dataset_run_maps = {
-        dataset_name: {
-            record["run"]: record
-            for record in eligible_adjusted_records
-            if record["dataset"] == dataset_name
-        }
-        for dataset_name in selected_adjusted_datasets
-    }
+    pair_tabs = st.tabs([pair["title"] for pair in ADJUSTMENT_PAIRS])
+    for pair_tab, pair in zip(pair_tabs, ADJUSTMENT_PAIRS):
+        with pair_tab:
+            render_adjustment_pair(
+                eligible_adjusted_records,
+                pair,
+                beta=beta_percent / 100.0,
+                gamma=gamma_percent / 100.0,
+            )
 
-    if len(run_names) < 2:
-        st.warning("至少需要两个具备主分、时间和功率记录的模型。")
-    elif base_run == target_run:
-        st.info("请选择两个不同的模型进行折算。")
-    elif not adjusted_datasets:
-        st.info("这两个模型没有共同的完整数据集结果。")
-    elif not selected_adjusted_datasets:
-        st.info("请选择至少一个数据集。")
-    else:
-        parameter_left, parameter_right = st.columns(2)
-        beta = parameter_left.slider(
-            "beta · 资源影响",
-            0,
-            100,
-            50,
-            1,
-            format="%d%%",
-            help="控制速度和功率差异对折算结果的整体影响。",
+    with st.expander("折算公式与方向"):
+        st.code(
+            "q_adjusted = q_target + beta * "
+            "[(1-gamma) * (1 - t_target/t_base) + "
+            "gamma * (1 - power_target/power_base)]"
         )
-        gamma = parameter_right.slider(
-            "gamma · 功率权重",
-            0,
-            100,
-            50,
-            1,
-            format="%d%%",
-            help="数值越高越看重功率，越低越看重速度。",
+        st.caption(
+            "每个数据集独立计算，不跨数据集求平均；beta、gamma 在公式中使用 0–1。"
         )
-
-        comparison_rows = []
-        incomplete_datasets = []
-        for selected_dataset in selected_adjusted_datasets:
-            base = dataset_run_maps[selected_dataset][base_run]
-            target = dataset_run_maps[selected_dataset][target_run]
-            base_time = base["performance_metrics"].get("time_per_sample")
-            target_time = target["performance_metrics"].get("time_per_sample")
-            base_power = average_power(base)
-            target_power = average_power(target)
-            if not all((base_time, target_time, base_power, target_power)):
-                incomplete_datasets.append(selected_dataset)
-                continue
-
-            speed_ratio = base_time / target_time
-            power_ratio = base_power / target_power
-            speed_delta = 1.0 - 1.0 / speed_ratio
-            power_delta = 1.0 - 1.0 / power_ratio
-            resource_delta = beta / 100.0 * (
-                (100.0 - gamma) / 100.0 * speed_delta
-                + gamma / 100.0 * power_delta
-            )
-            comparison_rows.append(
-                {
-                    "数据集": selected_dataset,
-                    "基线分数": base["primary_score"],
-                    "目标原始分数": target["primary_score"],
-                    "速度倍率": speed_ratio,
-                    "功率倍率": power_ratio,
-                    "资源修正": resource_delta,
-                    "目标折算分数": target["primary_score"] + resource_delta,
-                }
-            )
-
-        if incomplete_datasets:
-            st.warning(
-                "以下数据集缺少时间或功率记录，未参与折算："
-                + "、".join(incomplete_datasets)
-            )
-
-        if comparison_rows:
-            color_map = {base_run: "#52796f", target_run: "#e76f51"}
-            chart_columns = st.columns(2)
-
-            raw_rows = []
-            adjusted_rows = []
-            for row in comparison_rows:
-                raw_rows.extend(
-                    [
-                        {"数据集": row["数据集"], "模型": base_run, "数值": row["基线分数"]},
-                        {"数据集": row["数据集"], "模型": target_run, "数值": row["目标原始分数"]},
-                    ]
-                )
-                adjusted_rows.extend(
-                    [
-                        {"数据集": row["数据集"], "模型": base_run, "数值": row["基线分数"]},
-                        {"数据集": row["数据集"], "模型": target_run, "数值": row["目标折算分数"]},
-                    ]
-                )
-
-            raw_figure = px.bar(
-                pd.DataFrame(raw_rows),
-                x="数据集",
-                y="数值",
-                color="模型",
-                barmode="group",
-                title="原始分数",
-                text_auto=".4g",
-                color_discrete_map=color_map,
-            )
-            raw_figure.update_traces(textposition="outside", cliponaxis=False)
-            raw_figure.update_layout(height=350, yaxis_title="分数")
-            with chart_columns[0]:
-                render_plotly(raw_figure, key="adjusted_raw_score")
-
-            adjusted_figure = px.bar(
-                pd.DataFrame(adjusted_rows),
-                x="数据集",
-                y="数值",
-                color="模型",
-                barmode="group",
-                title="折算结果",
-                text_auto=".4g",
-                color_discrete_map=color_map,
-            )
-            adjusted_figure.update_traces(textposition="outside", cliponaxis=False)
-            adjusted_figure.update_layout(height=380, yaxis_title="分数")
-            adjusted_figure.add_annotation(
-                x=1,
-                y=1.12,
-                xref="paper",
-                yref="paper",
-                text=f"beta = {beta}% · gamma = {gamma}%",
-                showarrow=False,
-                xanchor="right",
-                font=dict(size=12, color="#555"),
-                bgcolor="rgba(245, 245, 245, 0.9)",
-                bordercolor="#d0d0d0",
-                borderwidth=1,
-                borderpad=5,
-            )
-            with chart_columns[1]:
-                render_plotly(adjusted_figure, key="adjusted_score")
-
-            st.markdown("#### 倍率与精确数值")
-            st.dataframe(
-                pd.DataFrame(comparison_rows),
-                width="stretch",
-                hide_index=True,
-            )
-            with st.expander("折算公式"):
-                st.code(
-                    "q_adjusted = q + beta/100 * "
-                    "[(100-gamma)/100 * delta_speed + "
-                    "gamma/100 * delta_power]"
-                )
-                st.caption("每个数据集独立计算，不跨数据集求平均。")
 
 
 with profiling_tab:

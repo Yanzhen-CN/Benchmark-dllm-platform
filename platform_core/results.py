@@ -62,6 +62,10 @@ METRIC_LABELS = {
     "complete_reference_sequence_accuracy": "完整答案准确率",
     "strict_reference_exact_match": "参考答案完全匹配",
     "answer_region_detected_rate": "答案区域识别率",
+    "direct_answer_instruction_following_rate": "直接回答遵循率",
+    "direct_answer_only_score": "直接回答样本条件分数",
+    "direct_answer_eligible_count": "直接回答样本数",
+    "direct_answer_excluded_count": "排除样本数",
     "output_budget_utilization": "输出预算利用率",
 }
 
@@ -348,6 +352,7 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
         "_all_updates.png",
         "_block_acceptance.png",
         "_sudoku_context_trace.gif",
+        "_token_trace.gif",
     )
 
     for path in sorted(visual_root.rglob("*")):

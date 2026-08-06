@@ -55,6 +55,8 @@ def trace_type(asset: dict) -> str:
         return "全部更新"
     if name.endswith("_sudoku_context_trace.gif"):
         return "数独生成动图"
+    if name.endswith("_token_trace.gif"):
+        return "Token 演化动图"
     if asset["suffix"] == ".csv":
         return "逐步数据"
     return asset["kind"]
@@ -174,6 +176,62 @@ if mode == "模型对比":
     if not raw_run_records:
         st.info("model_output 中没有可比较的运行。")
         st.stop()
+
+    sudoku_sample = "sudoku4-d1-0004"
+    sudoku_case_root = paths.output_root / "visualization_output"
+    sudoku_case_assets = {
+        "LLaDA2.1 / qmode": sudoku_case_root
+        / "llada2_1"
+        / "qmode"
+        / "sudoku4_1shot"
+        / f"{sudoku_sample}_token_trace.gif",
+        "DiffusionGemma / official": sudoku_case_root
+        / "diffusiongemma"
+        / "official"
+        / "sudoku4_1shot"
+        / f"{sudoku_sample}_token_trace.gif",
+    }
+    available_sudoku_case_assets = {
+        label: path for label, path in sudoku_case_assets.items() if path.is_file()
+    }
+    if available_sudoku_case_assets:
+        st.subheader("数独同题 Trace：LLaDA2.1 vs DiffusionGemma")
+        st.caption(
+            f"固定展示同一样本 {sudoku_sample}。该样本按共同 Trace 的最终输出长度中位数规则选择，"
+            "用于观察生成过程，不代表总体准确率。"
+        )
+        selected_sudoku_models = st.multiselect(
+            "展示模型",
+            list(available_sudoku_case_assets),
+            default=list(available_sudoku_case_assets),
+            key="sudoku_case_models",
+        )
+        if selected_sudoku_models:
+            columns = st.columns(len(selected_sudoku_models))
+            for column, label in zip(columns, selected_sudoku_models):
+                with column:
+                    st.markdown(f"**{label}**")
+                    pausable_gif(
+                        available_sudoku_case_assets[label],
+                        caption=f"{label} · Token 演化",
+                    )
+        else:
+            st.info("请选择 LLaDA2.1、DiffusionGemma，或同时选择两者。")
+
+        comparison_root = (
+            sudoku_case_root / "sudoku_model_comparison" / "sudoku4_1shot"
+        )
+        comparison_figures = (
+            ("位置状态", comparison_root / "trace_position_state.png"),
+            ("接受与修订", comparison_root / "accept_trace.png"),
+        )
+        existing_figures = [item for item in comparison_figures if item[1].is_file()]
+        if len(selected_sudoku_models) == 2 and existing_figures:
+            figure_columns = st.columns(len(existing_figures))
+            for column, (caption, path) in zip(figure_columns, existing_figures):
+                with column:
+                    zoomable_image(path, caption=caption)
+        st.divider()
 
     report_trace_runs = [
         run

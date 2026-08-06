@@ -100,6 +100,50 @@ with st.expander("精确分数表"):
     st.caption("缺失结果在雷达图中按 0 显示，表格中保留为空。")
 
 if any(name.startswith("sudoku") for name in selected_datasets):
+    llada2_sudoku = [
+        record
+        for record in records
+        if record["model"] == "llada2_1"
+        and record["config"] == "qmode"
+        and record["dataset"] in selected_datasets
+        and record["dataset"] in {"sudoku4_1shot", "sudoku9_1shot"}
+        and record["reportable"]
+    ]
+    if llada2_sudoku:
+        st.subheader("LLaDA2.1 数独：全样本与指令遵循条件分数")
+        diagnostic_rows = []
+        for record in llada2_sudoku:
+            metrics = record["score_metrics"]
+            diagnostic_rows.append(
+                {
+                    "数据集": record["dataset"],
+                    "全部样本数": record["n_samples"],
+                    "全样本正式分数": record["primary_score"],
+                    "直接回答遵循率": metrics.get(
+                        "direct_answer_instruction_following_rate"
+                    ),
+                    "条件分数样本数": metrics.get("direct_answer_eligible_count"),
+                    "排除样本数": metrics.get("direct_answer_excluded_count"),
+                    "直接回答样本条件分数": metrics.get("direct_answer_only_score"),
+                }
+            )
+        st.dataframe(
+            pd.DataFrame(diagnostic_rows),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "全样本正式分数": st.column_config.NumberColumn(format="%.4f"),
+                "直接回答遵循率": st.column_config.NumberColumn(format="%.2f"),
+                "直接回答样本条件分数": st.column_config.NumberColumn(
+                    format="%.4f"
+                ),
+            },
+        )
+        st.caption(
+            "条件分数只在严格按指令直接提交答案的样本上计算，并明确展示改变后的分母；"
+            "它是指令遵循诊断，不替代全样本正式分数。没有符合样本时显示为空（N/A）。"
+        )
+
     with st.expander("如何理解 Sudoku 主分"):
         st.write(
             "六个 Sudoku 子集独立展示。完整解必须保留全部题面数字，并满足行、列和宫约束；"
