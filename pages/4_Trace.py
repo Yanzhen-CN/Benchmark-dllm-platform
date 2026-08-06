@@ -51,7 +51,7 @@ def trace_type(asset: dict) -> str:
     if name.endswith("_block_acceptance.png"):
         return "Block 内接受顺序"
     if name.endswith("_accept_trace.png"):
-        return "Accept 更新"
+        return "首次接受 + 后续修改"
     if name.endswith("_all_updates.png"):
         return "全部更新"
     if name.endswith("_sudoku_context_trace.gif"):
@@ -384,7 +384,7 @@ else:
                 for name in (
                     "数独生成动图",
                     "Token 演化动图",
-                    "Accept 更新",
+                    "首次接受 + 后续修改",
                 )
                 if name in common_types
             ]

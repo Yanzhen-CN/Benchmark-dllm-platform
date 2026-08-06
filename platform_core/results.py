@@ -315,7 +315,7 @@ def _asset_kind(path: Path) -> str:
     if path.suffix.lower() == ".gif":
         return "动图"
     if "accept_trace" in name:
-        return "Accept trace"
+        return "首次接受 + 后续修改"
     if "first_accept" in name:
         return "首次接受"
     if "position_state" in name:
@@ -341,7 +341,6 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
         "accept_trace.png",
         "block_local_tau_comparison.png",
         "forward_efficiency.png",
-        "trace_first_accept.png",
         "trace_position_state.png",
         "trace_step_events.png",
         "answer_trace.png",
