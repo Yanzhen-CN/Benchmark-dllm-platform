@@ -5,47 +5,20 @@ import streamlit as st
 from platform_core.ui import configure_page, paths_sidebar, require_ready
 
 
-configure_page("Home | Benchmark-dllm", "●")
+configure_page("首页 | Benchmark-dllm")
 paths = paths_sidebar()
 require_ready(paths)
 
 st.markdown(
     """
     <style>
-    .home-grid {
-        display: grid;
-        gap: 1rem;
-        margin: .8rem 0 2rem;
-    }
-    .home-grid.evaluation { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .home-grid.run { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .home-card {
-        box-sizing: border-box;
-        min-height: 12.5rem;
-        padding: 1.15rem 1.1rem;
-        border: 1px solid #cdd6cf;
-        border-radius: .7rem;
+    [data-testid="stVerticalBlockBorderWrapper"] {
         background: rgba(255, 252, 244, .72);
-        color: #173b34 !important;
-        text-decoration: none !important;
-        display: flex;
-        flex-direction: column;
-        transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+        border-color: #cdd6cf;
     }
-    .home-card:hover {
+    [data-testid="stVerticalBlockBorderWrapper"]:hover {
         border-color: #4f8f7d;
-        box-shadow: 0 .45rem 1.2rem rgba(32, 70, 59, .09);
-        transform: translateY(-2px);
-    }
-    .home-card h3 { margin: 0 0 .75rem; font-size: 1.55rem; }
-    .home-card p { margin: 0; color: #344c46; line-height: 1.65; }
-    .home-card span { margin-top: auto; padding-top: 1rem; font-weight: 600; }
-    @media (max-width: 980px) {
-        .home-grid.evaluation, .home-grid.run { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 620px) {
-        .home-grid.evaluation, .home-grid.run { grid-template-columns: 1fr; }
-        .home-card { min-height: 10rem; }
+        box-shadow: 0 .45rem 1.2rem rgba(32, 70, 59, .08);
     }
     </style>
     """,
@@ -53,43 +26,26 @@ st.markdown(
 )
 
 st.title("Benchmark-dllm")
-st.caption("一个方便运行 Benchmark、查看评测结果和分析模型表现的平台。")
+st.caption("运行评测、查看结果，并分析扩散语言模型的生成过程。")
 
-st.subheader("Evaluation")
-st.markdown(
-    """
-    <div class="home-grid evaluation">
-      <a class="home-card" href="Score_Overview" target="_self">
-        <h3>Score</h3><p>比较数据集主分、模型和变体。</p><span>打开 Score →</span>
-      </a>
-      <a class="home-card" href="Performance" target="_self">
-        <h3>Performance</h3><p>查看延迟、吞吐、能量和 profiling。</p><span>打开 Performance →</span>
-      </a>
-      <a class="home-card" href="Trace" target="_self">
-        <h3>Trace</h3><p>检查逐步生成、关键帧和答案区域。</p><span>打开 Trace →</span>
-      </a>
-      <a class="home-card" href="Charts" target="_self">
-        <h3>Charts</h3><p>浏览已经生成的配置图表和 GIF 动图。</p><span>打开 Charts →</span>
-      </a>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
-st.subheader("Run Benchmark")
-st.markdown(
-    """
-    <div class="home-grid run">
-      <a class="home-card" href="Catalog" target="_self">
-        <h3>Catalog</h3><p>查看模型、变体、数据集和实验矩阵。</p><span>打开 Catalog →</span>
-      </a>
-      <a class="home-card" href="Environments" target="_self">
-        <h3>Environment</h3><p>确认模型启动脚本和隔离环境状态。</p><span>打开 Environment →</span>
-      </a>
-      <a class="home-card" href="Run" target="_self">
-        <h3>Run</h3><p>选择矩阵、模型和数据集并生成命令。</p><span>打开 Run →</span>
-      </a>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+def page_card(column, page: str, title: str, description: str, icon: str) -> None:
+    with column:
+        with st.container(border=True, height=170):
+            st.page_link(page, label=title, icon=icon, use_container_width=True)
+            st.write(description)
+
+
+st.subheader("评测结果")
+score, detail, performance, trace = st.columns(4)
+page_card(score, "pages/1_Score_Overview.py", "数据集总分", "比较模型在各数据集上的主分。", ":material/analytics:")
+page_card(detail, "pages/2_Score_Detail.py", "指标明细", "展开数据集副指标和样本级结果。", ":material/table_chart:")
+page_card(performance, "pages/3_Performance.py", "性能", "比较接受 TPS、耗时、能耗、显存与 Profiling。", ":material/speed:")
+page_card(trace, "pages/4_Trace.py", "生成轨迹", "查看接受顺序、逐步变化和 Sudoku 动图。", ":material/timeline:")
+
+st.subheader("运行与管理")
+run, catalog, environment, charts = st.columns(4)
+page_card(run, "pages/5_Run.py", "运行任务", "选择实验矩阵、模型、变体和数据集。", ":material/play_arrow:")
+page_card(catalog, "pages/6_Catalog.py", "模型与数据集", "浏览当前模型配置与数据集设置。", ":material/inventory_2:")
+page_card(environment, "pages/7_Environments.py", "运行环境", "查看模型启动器和隔离环境状态。", ":material/deployed_code:")
+page_card(charts, "pages/8_Charts.py", "可视化图库", "集中浏览和管理已生成的图表与动图。", ":material/gallery_thumbnail:")
