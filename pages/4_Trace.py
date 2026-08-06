@@ -346,7 +346,7 @@ else:
             labels.append(f"{run}: {'未评分' if score is None else f'{score:.3f}'}")
         return f"{sample_id} · " + " / ".join(labels)
 
-    report_sample = "sudoku4-d1-0004"
+    report_sample = "sudoku4-d1-0164"
     sample_name = st.selectbox(
         "双方共有的 sample",
         common_samples,
@@ -381,7 +381,11 @@ else:
             common_types,
             default=[
                 name
-                for name in ("Token 演化动图", "Accept 更新")
+                for name in (
+                    "数独生成动图",
+                    "Token 演化动图",
+                    "Accept 更新",
+                )
                 if name in common_types
             ]
             or common_types[:1],
@@ -393,27 +397,22 @@ else:
 
     st.caption(
         "这里只展示双方共有的数据集、同一个 sample 和同一种 Trace 类型；"
-        "任何一方独有的图不会混入对照。"
+        "每一种图单独占一行，左右始终是同类型对照。"
     )
-    columns = st.columns(2)
-    for column, run in zip(columns, selected_runs):
+    assets_by_run = {
+        run: [asset for asset in pair_assets if asset["model"] == run]
+        for run in selected_runs
+    }
+
+    header_columns = st.columns(2)
+    for column, run in zip(header_columns, selected_runs):
         with column:
             score = score_maps[run].get(sample_name)
             score_text = "未评分" if score is None else f"主分 {score:.4f}"
             st.markdown(f"### {run}")
             st.caption(f"{dataset_label(dataset_name)} · {sample_name} · {score_text}")
-
-            all_run_assets = [
-                asset for asset in pair_assets if asset["model"] == run
-            ]
-            run_assets = [
-                asset
-                for asset in all_run_assets
-                if trace_type(asset) in selected_types
-            ]
-            recycled_assets = trashed_trace_entries(
-                run, dataset_name, sample_name
-            )
+            all_run_assets = assets_by_run[run]
+            recycled_assets = trashed_trace_entries(run, dataset_name, sample_name)
             action_left, action_right = st.columns(2)
             if all_run_assets:
                 if action_left.button(
@@ -472,19 +471,33 @@ else:
                     if recycled_assets
                     else "该运行尚未生成这个 sample 的 Trace 图片。"
                 )
-                continue
-            if not selected_types:
-                continue
-            run_assets.sort(key=lambda asset: selected_types.index(trace_type(asset)))
-            for asset in run_assets:
-                if asset["suffix"] == ".gif":
-                    pausable_gif(asset["path"], caption=trace_type(asset))
-                elif asset["suffix"] == ".png":
-                    zoomable_image(asset["path"], caption=trace_type(asset))
-                elif asset["suffix"] == ".csv":
-                    try:
-                        frame = pd.read_csv(asset["path"])
-                    except (OSError, pd.errors.ParserError) as exc:
-                        st.error(f"无法读取 {asset['name']}：{exc}")
-                    else:
-                        st.dataframe(frame, width="stretch", hide_index=True)
+
+    for selected_type in selected_types:
+        st.markdown(f"#### {selected_type}")
+        type_columns = st.columns(2)
+        for column, run in zip(type_columns, selected_runs):
+            with column:
+                matching_assets = [
+                    asset
+                    for asset in assets_by_run[run]
+                    if trace_type(asset) == selected_type
+                ]
+                if not matching_assets:
+                    st.info(f"{run} 缺少 {selected_type}。")
+                    continue
+                for asset in matching_assets:
+                    if asset["suffix"] == ".gif":
+                        pausable_gif(asset["path"], caption=run)
+                    elif asset["suffix"] == ".png":
+                        zoomable_image(
+                            asset["path"],
+                            caption=run,
+                            preview_width="100%",
+                        )
+                    elif asset["suffix"] == ".csv":
+                        try:
+                            frame = pd.read_csv(asset["path"])
+                        except (OSError, pd.errors.ParserError) as exc:
+                            st.error(f"无法读取 {asset['name']}：{exc}")
+                        else:
+                            st.dataframe(frame, width="stretch", hide_index=True)

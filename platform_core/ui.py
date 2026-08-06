@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+from .gif_frames import decode_gif_frames
 from .paths import PlatformPaths
 
 
@@ -415,67 +417,77 @@ def _legacy_zoomable_image(
 
 def pausable_gif(path: Path, *, caption: str | None = None) -> None:
     try:
-        payload = path.read_bytes()
-    except OSError as exc:
+        frames, durations, source_width, source_height = decode_gif_frames(path)
+    except (OSError, ValueError) as exc:
         st.error(f"无法读取动图：{exc}")
         return
-    encoded = base64.b64encode(payload).decode("ascii")
+    if not frames:
+        st.info("动图没有可显示的帧。")
+        return
+
     identifier = "gif_" + hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
-    if len(payload) >= 10 and payload[:3] == b"GIF":
-        source_width = int.from_bytes(payload[6:8], "little") or 800
-        source_height = int.from_bytes(payload[8:10], "little") or 480
-    else:
-        source_width, source_height = 800, 480
-    display_height = int(source_height * min(1.0, 900.0 / source_width))
-    frame_height = max(220, min(900, display_height + 82))
     safe_caption = html.escape(caption or path.name)
+    display_width = min(source_width, 560)
+    display_height = round(source_height * display_width / max(1, source_width))
+    frame_height = max(230, min(900, display_height + 84))
+    frame_json = json.dumps(frames, ensure_ascii=True)
+    duration_json = json.dumps(durations)
+
     components.html(
         f"""
-        <div style="width:100%;text-align:center;font-family:Georgia,'Times New Roman',serif;">
-          <div style="position:relative;display:inline-block;max-width:100%;">
-            <img id="{identifier}_image" src="data:image/gif;base64,{encoded}"
-                 style="display:block;max-width:100%;height:auto;border-radius:10px;" />
-            <canvas id="{identifier}_canvas"
-                    style="display:none;max-width:100%;height:auto;border-radius:10px;"></canvas>
+        <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+        *{{box-sizing:border-box}}html,body{{margin:0;padding:0;background:transparent;font-family:sans-serif}}
+        .wrap{{width:100%;text-align:center}}.stage{{position:relative;display:inline-block;
+          width:min(100%,{source_width}px);cursor:pointer;user-select:none}}
+        .stage img{{display:block;width:100%;height:auto;border-radius:10px;background:#fff}}
+        .overlay{{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}}
+        .icon{{display:grid;place-items:center;width:54px;height:54px;border-radius:999px;
+          color:#fff;background:rgba(15,23,42,.42);font-size:22px;line-height:1;
+          opacity:.22;transition:opacity .16s ease,transform .16s ease;transform:scale(.94)}}
+        .stage:hover .icon,.icon.flash{{opacity:.78;transform:scale(1)}}
+        .controls{{display:flex;align-items:center;gap:10px;width:min(100%,{source_width}px);
+          margin:8px auto 0;color:#64748b;font-size:12px}}
+        .controls input{{flex:1;min-width:80px;accent-color:#0f766e;cursor:pointer}}
+        .step{{min-width:76px;text-align:right;font-variant-numeric:tabular-nums}}
+        .caption{{margin-top:5px;color:#64748b;font-size:12px}}
+        </style></head><body><div class="wrap">
+          <div class="stage" id="{identifier}_stage" role="button" tabindex="0"
+               aria-label="点击播放或暂停 GIF">
+            <img id="{identifier}_image" alt="{safe_caption}">
+            <div class="overlay"><div class="icon" id="{identifier}_icon">❚❚</div></div>
           </div>
-          <div style="margin-top:10px;">
-            <button id="{identifier}_toggle" style="
-              border:1px solid #cbd5e1;border-radius:7px;background:#fff;
-              padding:6px 16px;cursor:pointer;color:#334155;font-size:13px;">
-              暂停
-            </button>
+          <div class="controls">
+            <input id="{identifier}_range" type="range" min="0" max="{len(frames) - 1}"
+                   value="0" step="1" aria-label="GIF step">
+            <span class="step" id="{identifier}_step">step 1 / {len(frames)}</span>
           </div>
-          <div style="margin-top:7px;color:#64748b;font-size:12px;">{safe_caption}</div>
-        </div>
-        <script>
+          <div class="caption">{safe_caption}</div>
+        </div><script>
         (() => {{
-          const image = document.getElementById("{identifier}_image");
-          const canvas = document.getElementById("{identifier}_canvas");
-          const button = document.getElementById("{identifier}_toggle");
-          let paused = false;
-          button.onclick = () => {{
-            if (!paused) {{
-              canvas.width = image.naturalWidth;
-              canvas.height = image.naturalHeight;
-              canvas.getContext("2d").drawImage(image, 0, 0);
-              canvas.style.width = `${{image.clientWidth}}px`;
-              image.style.display = "none";
-              canvas.style.display = "block";
-              button.textContent = "继续";
-            }} else {{
-              canvas.style.display = "none";
-              image.style.display = "block";
-              button.textContent = "暂停";
-            }}
-            paused = !paused;
-          }};
+          const frames={frame_json},durations={duration_json};
+          const stage=document.getElementById("{identifier}_stage");
+          const image=document.getElementById("{identifier}_image");
+          const icon=document.getElementById("{identifier}_icon");
+          const range=document.getElementById("{identifier}_range");
+          const step=document.getElementById("{identifier}_step");
+          let index=0,playing=true,timer=null,flashTimer=null;
+          const show=()=>{{image.src=frames[index];range.value=String(index);
+            step.textContent="step "+(index+1)+" / "+frames.length}};
+          const flash=()=>{{icon.textContent=playing?"❚❚":"▶";icon.classList.add("flash");
+            clearTimeout(flashTimer);flashTimer=setTimeout(()=>icon.classList.remove("flash"),520)}};
+          const schedule=()=>{{clearTimeout(timer);if(!playing)return;
+            timer=setTimeout(()=>{{index=(index+1)%frames.length;show();schedule()}},durations[index])}};
+          const toggle=()=>{{playing=!playing;flash();schedule()}};
+          stage.onclick=toggle;stage.onkeydown=event=>{{if(event.key===" "||event.key==="Enter"){{
+            event.preventDefault();toggle()}}}};
+          range.oninput=()=>{{playing=false;clearTimeout(timer);index=Number(range.value);show();flash()}};
+          show();schedule();
         }})();
-        </script>
+        </script></body></html>
         """,
         height=frame_height,
         scrolling=False,
     )
-
 
 def zoomable_image(
     path: str | Path,
