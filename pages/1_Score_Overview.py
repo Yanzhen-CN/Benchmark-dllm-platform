@@ -3,12 +3,16 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from platform_core.compare import render_comparison
 from platform_core.radar import render_radar
 from platform_core.results import (
+    available_metrics,
     DEFAULT_COMPARISON_RUNS,
     DEFAULT_DATASETS,
     datasets,
+    load_sample_scores,
     load_summary_records,
+    metric_label,
 )
 from platform_core.selection import select_dataset_subsets, select_model_variants
 from platform_core.ui import configure_page, paths_sidebar, require_ready
@@ -147,5 +151,86 @@ if any(name.startswith("sudoku") for name in selected_datasets):
     with st.expander("如何理解 Sudoku 主分"):
         st.write(
             "六个 Sudoku 子集独立展示。完整解必须保留全部题面数字，并满足行、列和宫约束；"
-            "空格正确率、题面保留率和答案区域检出率在“指标明细”中查看。"
+            "空格正确率、题面保留率和答案区域检出率可在下方明细中查看。"
         )
+
+st.subheader("指标与样本明细")
+detail_dataset = st.selectbox(
+    "明细数据集",
+    selected_datasets,
+    key="score_detail_dataset",
+)
+detail_records = [
+    record
+    for record in filtered
+    if record["dataset"] == detail_dataset
+]
+detail_runs = sorted({record["run"] for record in detail_records})
+metric_options = available_metrics(detail_records, "score_metrics")
+primary_names = {record["primary_metric"] for record in detail_records}
+default_metrics = [name for name in metric_options if name in primary_names]
+fallback_order = (
+    ("blank_cell_accuracy", "given_preservation_rate", "puzzle_success_rate")
+    if detail_dataset.startswith("sudoku")
+    else ("valid_rate", "complete_rate", "answer_region_detected_rate")
+)
+for fallback in fallback_order:
+    if fallback in metric_options and fallback not in default_metrics:
+        default_metrics.append(fallback)
+selected_metrics = st.multiselect(
+    "明细指标",
+    metric_options,
+    default=default_metrics[:4] or metric_options[:3],
+    format_func=metric_label,
+    key="score_detail_metrics",
+)
+
+metric_rows = []
+for record in detail_records:
+    for metric in selected_metrics:
+        value = record["score_metrics"].get(metric)
+        if value is not None:
+            metric_rows.append(
+                {
+                    "模型": record["run"],
+                    "metric": metric_label(metric),
+                    "value": value,
+                }
+            )
+if metric_rows:
+    render_comparison(metric_rows, row_key="模型")
+else:
+    st.info("当前组合没有可比较的副指标。")
+
+with st.expander("样本级评分"):
+    if not detail_runs:
+        st.info("当前数据集没有选中的运行。")
+    else:
+        detail_run = st.selectbox(
+            "查看运行",
+            detail_runs,
+            key="score_detail_run",
+        )
+        samples = load_sample_scores(
+            paths.output_root,
+            detail_run,
+            detail_dataset,
+        )
+        sample_rows = []
+        for sample in samples:
+            row = {
+                "sample": sample["sample"],
+                "valid": sample["valid"],
+                "complete": sample["complete"],
+            }
+            for metric in selected_metrics:
+                row[metric_label(metric)] = sample["metrics"].get(metric)
+            sample_rows.append(row)
+        if sample_rows:
+            st.dataframe(
+                pd.DataFrame(sample_rows),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("该运行没有样本级评分文件。")

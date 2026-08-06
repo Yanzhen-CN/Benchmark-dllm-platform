@@ -39,6 +39,34 @@ def sample_ids(path: Path) -> list[str]:
     )
 
 
+def common_trace_datasets(model_output_root: Path, runs: list[str]) -> list[str]:
+    dataset_sets = []
+    for run in runs:
+        model, separator, variant = run.partition("/")
+        if not separator or not model or not variant:
+            return []
+        dataset_sets.append(
+            set(child_directories(model_output_root / model / variant))
+        )
+    return sorted(set.intersection(*dataset_sets)) if dataset_sets else []
+
+
+def common_trace_samples(
+    model_output_root: Path,
+    runs: list[str],
+    dataset: str,
+) -> list[str]:
+    sample_sets = []
+    for run in runs:
+        model, separator, variant = run.partition("/")
+        if not separator or not model or not variant:
+            return []
+        sample_sets.append(
+            set(sample_ids(model_output_root / model / variant / dataset))
+        )
+    return sorted(set.intersection(*sample_sets)) if sample_sets else []
+
+
 def _dataset_arguments(dataset: str) -> list[str]:
     if dataset in MATRIX_DATASETS:
         return ["-d", dataset]
