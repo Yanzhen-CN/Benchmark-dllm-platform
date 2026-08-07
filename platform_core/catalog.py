@@ -68,7 +68,7 @@ def _dataset_spec(
         path=config_path,
         group=(
             "Sudoku"
-            if name.startswith("sudoku")
+            if "sudoku" in name.lower()
             else "HelloBench"
             if name == "hellobench"
             else "Core"
@@ -94,6 +94,45 @@ def discover_models(paths: PlatformPaths) -> list[ModelSpec]:
                 variants=variants,
                 max_context_tokens=int(context) if context is not None else None,
                 path=config_path,
+            )
+        )
+    return models
+
+
+def discover_experiment_models(
+    paths: PlatformPaths,
+    experiment_path: str | Path,
+) -> list[ModelSpec]:
+    """Return the model variants declared by one experiment matrix."""
+
+    matrix_path = Path(experiment_path).resolve()
+    matrix = _load_yaml(matrix_path)
+    base = (matrix_path.parent / str(matrix.get("base_dir") or ".")).resolve()
+    available = {item.path.resolve(): item for item in discover_models(paths)}
+    models: list[ModelSpec] = []
+    for raw_entry in matrix.get("models") or []:
+        entry = raw_entry if isinstance(raw_entry, dict) else {"config": raw_entry}
+        config_ref = entry.get("config")
+        if not config_ref:
+            continue
+        config_path = Path(str(config_ref))
+        if not config_path.is_absolute():
+            config_path = (base / config_path).resolve()
+        model = available.get(config_path)
+        if model is None:
+            continue
+        configured_variants = entry.get("variants")
+        variants = (
+            tuple(str(name) for name in configured_variants)
+            if configured_variants is not None
+            else model.variants
+        )
+        models.append(
+            ModelSpec(
+                name=model.name,
+                variants=variants,
+                max_context_tokens=model.max_context_tokens,
+                path=model.path,
             )
         )
     return models

@@ -21,12 +21,14 @@
 python start.py
 ```
 
+
 首次启动会自动准备平台环境。模型仍使用 `Benchmark-dllm/venv_scripts` 中各自独立的运行环境，不需要手动进入 `.venv`。
 
 默认打开：
 
 ```text
 http://127.0.0.1:8501
+http://<this-device-LAN-IP>:8501
 ```
 
 ## 结果目录

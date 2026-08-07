@@ -4,6 +4,8 @@ from typing import Any, Iterable
 
 import streamlit as st
 
+from .i18n import tr
+
 
 SUDOKU_ORDER = {
     "sudoku4": 0,
@@ -84,7 +86,7 @@ def select_dataset_subsets(
         default_parents.append("Sudoku")
 
     selected_parents = st.multiselect(
-        "数据集",
+        tr("数据集", "Datasets"),
         parent_options,
         default=default_parents,
         key=f"{key_prefix}_dataset_groups",
@@ -93,7 +95,7 @@ def select_dataset_subsets(
     if "HelloBench" in selected_parents:
         selected.extend(
             st.multiselect(
-                "HelloBench 长度",
+                tr("HelloBench 长度", "HelloBench lengths"),
                 hellobench,
                 default=_default_hellobench(hellobench, defaults),
                 format_func=dataset_label,
@@ -103,12 +105,12 @@ def select_dataset_subsets(
     if "Sudoku" in selected_parents:
         selected.extend(
             st.multiselect(
-                "Sudoku 子集",
+                tr("Sudoku 子集", "Sudoku subsets"),
                 sudoku,
                 default=_default_sudoku(sudoku, defaults),
                 format_func=dataset_label,
                 key=f"{key_prefix}_sudoku_subsets",
-                help="每个子集使用独立的 prompt、预算和评分结果。",
+                help=tr("每个子集使用独立的 prompt、预算和评分结果。", "Each subset has its own prompt, budget, and score."),
             )
         )
     return selected
@@ -136,7 +138,7 @@ def select_run_datasets(
         *(["Sudoku"] if sudoku else []),
     ]
     selected_parents = st.multiselect(
-        "数据集",
+        tr("数据集", "Datasets"),
         parent_options,
         default=[],
         key=f"{key_prefix}_dataset_groups",
@@ -146,21 +148,21 @@ def select_run_datasets(
     if "HelloBench" in selected_parents:
         selected.append("hellobench")
         lengths = st.multiselect(
-            "HelloBench 长度",
+            tr("HelloBench 长度", "HelloBench lengths"),
             ["2k", "4k"],
             default=["2k"],
             key=f"{key_prefix}_hellobench_lengths",
-            help="2k 和 4k 共用 HelloBench 配置；默认只运行 2k。",
+            help=tr("2k 和 4k 共用 HelloBench 配置；默认只运行 2k。", "2k and 4k share one configuration; 2k is selected by default."),
         )
     if "Sudoku" in selected_parents:
         selected.extend(
             st.multiselect(
-                "Sudoku 子集",
+                tr("Sudoku 子集", "Sudoku subsets"),
                 sudoku,
                 default=_default_sudoku(sudoku, set()),
                 format_func=dataset_label,
                 key=f"{key_prefix}_sudoku_subsets",
-                help="默认选择 4x4 · 1-shot。",
+                help=tr("默认选择 4x4 · 1-shot。", "4x4 · 1-shot is selected by default."),
             )
         )
     return selected, lengths
@@ -189,7 +191,7 @@ def select_single_dataset(
     )
     index = parent_options.index(default_parent) if default_parent in parent_options else 0
     parent = st.selectbox(
-        "数据集",
+        tr("数据集", "Dataset"),
         parent_options,
         index=index,
         key=f"{key_prefix}_dataset_group",
@@ -197,7 +199,7 @@ def select_single_dataset(
     if parent == "HelloBench":
         child_index = hellobench.index(default_dataset) if default_dataset in hellobench else 0
         return st.selectbox(
-            "HelloBench 长度",
+            tr("HelloBench 长度", "HelloBench length"),
             hellobench,
             index=child_index,
             format_func=dataset_label,
@@ -210,7 +212,7 @@ def select_single_dataset(
         )
         child = default_children[0]
         return st.selectbox(
-            "Sudoku 子集",
+            tr("Sudoku 子集", "Sudoku subset"),
             sudoku,
             index=sudoku.index(child),
             format_func=dataset_label,
@@ -226,6 +228,7 @@ def select_model_variants(
     key_prefix: str,
 ) -> list[str]:
     default_run_set = set(default_runs)
+    selection_scope = "__".join(sorted(default_run_set)) or "default"
     model_options = sorted({record["model"] for record in records})
     default_models = sorted(
         {
@@ -235,10 +238,10 @@ def select_model_variants(
         }
     )
     selected_models = st.multiselect(
-        "主模型",
+        tr("主模型", "Models"),
         model_options,
         default=default_models or model_options[:3],
-        key=f"{key_prefix}_models",
+        key=f"{key_prefix}_models_{selection_scope}",
     )
 
     run_records: dict[str, dict[str, Any]] = {}
@@ -273,9 +276,9 @@ def select_model_variants(
         return f"{model} / {record['config']}"
 
     return st.multiselect(
-        "变体 / 运行",
+        tr("变体 / 运行", "Variants / runs"),
         run_options,
         default=selected_defaults,
         format_func=run_label,
-        key=f"{key_prefix}_runs",
+        key=f"{key_prefix}_runs_{selection_scope}",
     )

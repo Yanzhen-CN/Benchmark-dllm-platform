@@ -4,10 +4,12 @@ import html
 
 import streamlit as st
 
+from platform_core.i18n import tr
+
 from platform_core.catalog import (
     discover_experiment_datasets,
+    discover_experiment_models,
     discover_experiments,
-    discover_models,
 )
 from platform_core.commands import RunSelection, build_run_command, command_text
 from platform_core.maintenance import (
@@ -51,14 +53,23 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("Run Benchmark")
+st.title(tr("运行评测", "Run Benchmark"))
 
-run_tab, records_tab = st.tabs(["运行", "记录管理"])
+run_sections = {
+    "run": tr("运行", "Run"),
+    "records": tr("记录管理", "Records"),
+}
+run_section = st.segmented_control(
+    tr("页面", "Section"),
+    list(run_sections),
+    default="run",
+    format_func=run_sections.get,
+    label_visibility="collapsed",
+    key="run_section",
+)
 
-with run_tab:
-    models = discover_models(paths)
+if run_section == "run":
     experiments = discover_experiments(paths)
-    model_map = {item.name: item for item in models}
     experiment_map = {item.name: item for item in experiments}
     if not experiment_map:
         st.warning("没有找到实验矩阵。")
@@ -66,18 +77,20 @@ with run_tab:
 
     matrix_names = list(experiment_map)
     matrix_name = st.selectbox(
-        "实验矩阵",
+        tr("实验矩阵", "Experiment matrix"),
         matrix_names,
         index=matrix_names.index("full_matrix") if "full_matrix" in matrix_names else 0,
     )
     matrix = experiment_map[matrix_name]
+    models = discover_experiment_models(paths, matrix.path)
+    model_map = {item.name: item for item in models}
     datasets = discover_experiment_datasets(paths, matrix.path)
 
-    selected_models = st.multiselect("模型", list(model_map), default=[])
+    selected_models = st.multiselect(tr("模型", "Models"), list(model_map), default=[])
     variants: list[str] = []
     if len(selected_models) == 1:
         variants = st.multiselect(
-            "变体",
+            tr("变体", "Variants"),
             list(model_map[selected_models[0]].variants),
         )
     elif len(selected_models) > 1:
@@ -96,19 +109,19 @@ with run_tab:
     }
     left, middle, right = st.columns(3)
     stage = left.selectbox(
-        "阶段",
+        tr("阶段", "Stage"),
         list(stage_labels),
         index=3,
         format_func=stage_labels.get,
     )
-    data_source = middle.radio("数据来源", ["real", "demo"], horizontal=True)
+    data_source = middle.radio(tr("数据来源", "Data source"), ["real", "demo"], horizontal=True)
     n_samples_value = right.number_input(
-        "样本数（0 表示使用配置值）", min_value=0, value=0
+        tr("样本数（0 表示使用配置值）", "Samples (0 uses the configured value)"), min_value=0, value=0
     )
 
     options = st.columns(2)
-    measure_compute = options[0].checkbox("记录计算指标")
-    dry_run = options[1].checkbox("仅预览命令", value=True)
+    measure_compute = options[0].checkbox(tr("记录计算指标", "Measure compute"))
+    dry_run = options[1].checkbox(tr("仅预览命令", "Preview command only"), value=True)
 
     selection = RunSelection(
         models=tuple(selected_models),
@@ -168,7 +181,7 @@ with run_tab:
             st.code(command_text(record.get("command", [])), language="powershell")
             st.text(read_log(record))
 
-with records_tab:
+elif run_section == "records":
     trash_entries = list_trash_entries(paths.output_root)
     with st.expander(f"Recycle bin ({len(trash_entries)})"):
         st.caption("Deleted benchmark outputs are kept here until the recycle bin is emptied.")

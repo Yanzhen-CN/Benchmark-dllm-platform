@@ -6,6 +6,8 @@ from typing import Any
 import plotly.graph_objects as go
 import streamlit as st
 
+from .ui import render_plotly_chart
+
 
 PALETTE = (
     "#0f4c45",
@@ -138,11 +140,11 @@ def render_radar(
         hovermode="closest",
         uirevision="dataset-score-radar",
     )
-    st.plotly_chart(
+    render_plotly_chart(
         figure,
-        width="stretch",
-        config={"displaylogo": False, "responsive": True},
         key="dataset_score_radar",
+        legend_title="模型",
+        margin={"l": 70, "r": 210, "t": 45, "b": 45},
     )
     st.caption(
         "单击图例可隐藏或恢复模型，双击可只看一个模型；鼠标悬停显示原始主分。"

@@ -6,6 +6,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+import streamlit as st
+
+from .i18n import language
+
 
 PERFORMANCE_METRICS = (
     "accepted_tps",
@@ -27,10 +31,27 @@ DEFAULT_DATASETS = (
 )
 
 DEFAULT_COMPARISON_RUNS = (
+    "illada_p1",
+    "dreamreasoner_p1",
     "diffusiongemma_official",
-    "gemma_dflash",
     "gemma_ar-baseline",
 )
+
+SUDOKU_COMPARISON_RUNS = (
+    "diffusiongemma_official",
+    "llada2_1_qmode",
+)
+
+
+def default_comparison_runs(dataset_names: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Use the designated LLaDA2.1-vs-DG pair for every Sudoku dataset."""
+    selected = tuple(dataset_names)
+    sudoku = tuple(name for name in selected if name.startswith("sudoku"))
+    if selected and len(sudoku) == len(selected):
+        return SUDOKU_COMPARISON_RUNS
+    if sudoku:
+        return tuple(dict.fromkeys((*DEFAULT_COMPARISON_RUNS, *SUDOKU_COMPARISON_RUNS)))
+    return DEFAULT_COMPARISON_RUNS
 
 METRIC_LABELS = {
     "primary_score": "主分",
@@ -62,12 +83,152 @@ METRIC_LABELS = {
     "complete_reference_sequence_accuracy": "完整答案准确率",
     "strict_reference_exact_match": "参考答案完全匹配",
     "answer_region_detected_rate": "答案区域识别率",
-    "direct_answer_instruction_following_rate": "直接回答遵循率",
-    "direct_answer_only_score": "直接回答样本条件分数",
-    "direct_answer_eligible_count": "直接回答样本数",
-    "direct_answer_excluded_count": "排除样本数",
     "output_budget_utilization": "输出预算利用率",
 }
+
+METRIC_LABELS.update({
+    "primary_score": "Primary score",
+    "accuracy": "Accuracy",
+    "pass_at_1": "Pass@1",
+    "final_eval_score": "Final evaluation score",
+    "long_output_integrity_score": "Long-output integrity",
+    "ruler_string_match_all": "String match",
+    "accepted_tps": "Accepted TPS",
+    "eps": "Average power (W)",
+    "peak_vram_gb": "Peak VRAM (GB)",
+    "time_per_sample": "Seconds / sample",
+    "accepted_tokens_per_sample": "Accepted tokens / sample",
+    "energy_per_sample": "Energy / sample (J)",
+    "answer_region_detected_rate": "Answer detected",
+    "answer_position_token_mapped_rate": "Answer position mapped",
+    "answer_start_ratio_mean": "Mean answer start position",
+    "reasoning_tokens_before_answer": "Reasoning tokens before answer",
+    "unclosed_thinking_rate": "Unclosed thinking",
+    "answer_marker_complete_rate": "Complete answer marker",
+    "executable_rate": "Executable code",
+    "answer_local_structure_first_score": "Structure-first score",
+    "official_render_score": "Render score",
+    "official_key_validation_score": "Key validation score",
+    "field_completion_rate": "Field completion",
+    "format_valid_rate": "Valid format",
+    "complete_correct_rate": "Complete and correct",
+    "blank_cell_accuracy": "Blank-cell accuracy",
+    "given_preservation_rate": "Fixed-clue preservation",
+    "constraint_valid": "Constraint-valid solution",
+    "puzzle_success_rate": "Puzzle success",
+    "exact_solve_rate": "Exact solve",
+    "strict_16_digit_format_rate": "Strict 16-digit format",
+    "strict_81_digit_format_rate": "Strict 81-digit format",
+    "direct_answer_instruction_following_rate": "Direct-answer compliance",
+    "length_compliance_rate": "Length compliance",
+    "seq_rep_4": "Seq-Rep-4",
+    "repeated_segment_fraction": "Repeated segment fraction",
+    "refusal_issue_rate": "Refusal rate",
+    "corrupt_text_issue_rate": "Corrupt-text rate",
+    "objective_structure_score": "Structure cues",
+    "terminal_punctuation_rate": "Natural ending",
+})
+
+METRIC_LABELS_ZH = {
+    "primary_score": "主分",
+    "accuracy": "准确率",
+    "pass_at_1": "一次通过率",
+    "final_eval_score": "最终结构评分",
+    "long_output_integrity_score": "长文本完整性",
+    "ruler_string_match_all": "字符串命中率",
+    "accepted_tps": "接受吞吐率",
+    "eps": "平均功率",
+    "peak_vram_gb": "峰值显存",
+    "time_per_sample": "单样本耗时",
+    "accepted_tokens_per_sample": "单样本接受 token 数",
+    "energy_per_sample": "单样本能耗",
+    "answer_region_detected_rate": "答案区域检出率",
+    "answer_position_token_mapped_rate": "答案位置映射率",
+    "answer_start_ratio_mean": "平均答案起始位置",
+    "reasoning_tokens_before_answer": "答案前 reasoning token 数",
+    "unclosed_thinking_rate": "thinking 未闭合率",
+    "answer_marker_complete_rate": "答案标记完整率",
+    "executable_rate": "代码可执行率",
+    "answer_local_structure_first_score": "结构优先分",
+    "official_render_score": "渲染分",
+    "official_key_validation_score": "关键字段验证分",
+    "field_completion_rate": "字段完成率",
+    "format_valid_rate": "格式有效率",
+    "complete_correct_rate": "完整且正确率",
+    "blank_cell_accuracy": "空格正确率",
+    "given_preservation_rate": "题面数字保留率",
+    "constraint_valid": "约束合法率",
+    "puzzle_success_rate": "整题成功率",
+    "exact_solve_rate": "完整解题率",
+    "strict_reference_exact_match": "严格参考答案匹配率",
+    "strict_16_digit_format_rate": "严格 16 位格式率",
+    "strict_81_digit_format_rate": "严格 81 位格式率",
+    "direct_answer_instruction_following_rate": "直接作答遵循率",
+    "answer_start_char_ratio": "正文起始位置",
+    "reasoning_word_count": "正文前 reasoning 词数",
+    "length_compliance_rate": "长度达标率",
+    "seq_rep_4": "四元组重复率",
+    "repeated_segment_fraction": "重复段落比例",
+    "refusal_issue_rate": "拒答率",
+    "corrupt_text_issue_rate": "损坏文本率",
+    "objective_structure_score": "结构提示分",
+    "terminal_punctuation_rate": "自然结束率",
+    "all_answers_match": "全部答案命中率",
+    "position_robustness_context_4160": "位置稳健性",
+}
+
+SCORE_METRIC_WHITELISTS = {
+    "gsm8k": (
+        "accuracy", "answer_region_detected_rate", "answer_position_token_mapped_rate",
+        "answer_start_ratio_mean", "reasoning_tokens_before_answer", "unclosed_thinking_rate",
+    ),
+    "mbpp": (
+        "pass_at_1", "answer_region_detected_rate", "executable_rate",
+        "answer_marker_complete_rate", "answer_local_structure_first_score",
+        "answer_start_ratio_mean", "unclosed_thinking_rate",
+    ),
+    "structeval_t": (
+        "final_eval_score", "official_render_score", "official_key_validation_score",
+        "field_completion_rate", "format_valid_rate", "complete_correct_rate",
+        "answer_region_detected_rate", "answer_marker_complete_rate",
+        "answer_local_structure_first_score", "answer_start_ratio_mean",
+        "unclosed_thinking_rate",
+    ),
+    "ruler": (
+        "ruler_string_match_all", "all_answers_match", "position_robustness_context_4160",
+        "answer_region_detected_rate", "answer_start_ratio_mean",
+    ),
+    "hellobench": (
+        "long_output_integrity_score", "length_compliance_rate", "seq_rep_4",
+        "repeated_segment_fraction", "refusal_issue_rate", "corrupt_text_issue_rate",
+        "answer_start_char_ratio", "reasoning_word_count", "objective_structure_score",
+        "terminal_punctuation_rate",
+    ),
+    "sudoku4": (
+        "blank_cell_accuracy", "given_preservation_rate", "constraint_valid",
+        "puzzle_success_rate", "strict_16_digit_format_rate",
+        "direct_answer_instruction_following_rate", "answer_region_detected_rate",
+    ),
+    "sudoku9": (
+        "strict_reference_exact_match", "blank_cell_accuracy", "given_preservation_rate",
+        "constraint_valid", "exact_solve_rate", "strict_81_digit_format_rate",
+        "direct_answer_instruction_following_rate", "answer_region_detected_rate",
+    ),
+}
+
+
+def score_metric_options(
+    dataset_name: str, records: list[dict[str, Any]]
+) -> list[str]:
+    available = set(available_metrics(records, "score_metrics"))
+    family = next(
+        (name for name in SCORE_METRIC_WHITELISTS if dataset_name.startswith(name)),
+        dataset_name,
+    )
+    return [
+        metric for metric in SCORE_METRIC_WHITELISTS.get(family, ())
+        if metric in available
+    ]
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -82,10 +243,12 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def metric_label(name: str) -> str:
-    label = METRIC_LABELS.get(name)
+    labels = METRIC_LABELS_ZH if language() == "zh" else METRIC_LABELS
+    label = labels.get(name)
     return f"{label} ({name})" if label and label != name else name
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_summary_records(output_root: Path) -> list[dict[str, Any]]:
     score_root = output_root / "score_output"
     records: list[dict[str, Any]] = []
@@ -247,6 +410,7 @@ def available_metrics(
     return [name for name, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_sample_scores(
     output_root: Path, run_name: str, dataset_name: str
 ) -> list[dict[str, Any]]:
@@ -315,7 +479,7 @@ def _asset_kind(path: Path) -> str:
     if path.suffix.lower() == ".gif":
         return "动图"
     if "accept_trace" in name:
-        return "首次接受 + 后续修改"
+        return "Accept trace"
     if "first_accept" in name:
         return "首次接受"
     if "position_state" in name:
@@ -331,6 +495,7 @@ def _asset_kind(path: Path) -> str:
     return "其他"
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
     visual_root = output_root / "visualization_output"
     assets = []
@@ -341,6 +506,7 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
         "accept_trace.png",
         "block_local_tau_comparison.png",
         "forward_efficiency.png",
+        "trace_first_accept.png",
         "trace_position_state.png",
         "trace_step_events.png",
         "answer_trace.png",
@@ -398,6 +564,7 @@ def load_trace_assets(output_root: Path) -> list[dict[str, Any]]:
     return assets
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_trace_summary_records(output_root: Path) -> list[dict[str, Any]]:
     """Load public dataset-level trace summaries for interactive comparison."""
     visual_root = output_root / "visualization_output"
@@ -448,6 +615,7 @@ def load_trace_summary_records(output_root: Path) -> list[dict[str, Any]]:
     return records
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_profiling_assets(output_root: Path) -> list[dict[str, Any]]:
     """Discover public profiling figures without duplicating plot logic."""
     visual_root = output_root / "visualization_output"
@@ -510,6 +678,7 @@ def load_profiling_assets(output_root: Path) -> list[dict[str, Any]]:
     return assets
 
 
+@st.cache_data(show_spinner=False, ttl=30)
 def load_profiling_comparison_records(output_root: Path) -> list[dict[str, Any]]:
     """Load profiling aggregates for interactive comparisons."""
     csv_path = (

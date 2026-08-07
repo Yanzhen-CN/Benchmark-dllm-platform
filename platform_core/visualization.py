@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import json
+import re
 import subprocess
 import sys
 
@@ -39,32 +41,55 @@ def sample_ids(path: Path) -> list[str]:
     )
 
 
-def common_trace_datasets(model_output_root: Path, runs: list[str]) -> list[str]:
-    dataset_sets = []
-    for run in runs:
-        model, separator, variant = run.partition("/")
-        if not separator or not model or not variant:
-            return []
-        dataset_sets.append(
-            set(child_directories(model_output_root / model / variant))
-        )
-    return sorted(set.intersection(*dataset_sets)) if dataset_sets else []
+def has_sudoku_answer_trace(path: Path, dataset: str) -> bool:
+    """Return whether a saved trace visibly forms one complete Sudoku answer."""
+
+    size = 4 if dataset.startswith("sudoku4") else 9
+    pattern = re.compile(rf"(?<![0-9])[1-{size}]{{{size * size}}}(?![0-9])")
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    return any(
+        pattern.search(str(step.get("decoded_text") or "")) is not None
+        for step in payload.get("trace", [])
+        if isinstance(step, dict)
+    )
 
 
-def common_trace_samples(
+def comparable_sudoku_samples(
     model_output_root: Path,
     runs: list[str],
     dataset: str,
 ) -> list[str]:
+    """Find common sample IDs whose traces form an answer in every run."""
+
     sample_sets = []
     for run in runs:
         model, separator, variant = run.partition("/")
-        if not separator or not model or not variant:
+        if not separator:
             return []
-        sample_sets.append(
-            set(sample_ids(model_output_root / model / variant / dataset))
+        run_root = model_output_root / model / variant / dataset
+        sample_sets.append(set(sample_ids(run_root)))
+    if not sample_sets:
+        return []
+    common = set.intersection(*sample_sets)
+    return [
+        sample_id
+        for sample_id in sorted(common)
+        if all(
+            has_sudoku_answer_trace(
+                model_output_root
+                / run.partition("/")[0]
+                / run.partition("/")[2]
+                / dataset
+                / f"{sample_id}.json",
+                dataset,
+            )
+            for run in runs
         )
-    return sorted(set.intersection(*sample_sets)) if sample_sets else []
+    ]
 
 
 def _dataset_arguments(dataset: str) -> list[str]:
@@ -75,6 +100,12 @@ def _dataset_arguments(dataset: str) -> list[str]:
         if dataset.startswith(prefix):
             return ["-d", base, "--output-suffix", dataset[len(prefix) :]]
     return ["-d", dataset]
+
+
+def _matrix_for_model(root: Path, model: str) -> Path:
+    if model == "llada2_1":
+        return root / "configs" / "experiments" / "llada2_1_sudoku.yaml"
+    return root / "configs" / "experiments" / "full_matrix.yaml"
 
 
 def trace_command(
@@ -93,7 +124,7 @@ def trace_command(
         str(root_python if root_python.exists() else Path(sys.executable)),
         str(root / "run_visualization.py"),
         "--matrix",
-        str(root / "configs" / "experiments" / "full_matrix.yaml"),
+        str(_matrix_for_model(root, model)),
         "-m",
         model,
         *_dataset_arguments(dataset),
@@ -105,6 +136,93 @@ def trace_command(
         sample,
         "--no-report",
     ]
+
+
+def trace_batch_command(
+    paths: PlatformPaths,
+    *,
+    runs: list[str],
+    dataset: str,
+    sample: str,
+) -> list[list[str]]:
+    if not runs:
+        raise ValueError("a Sudoku trace batch requires at least one run")
+    commands: list[list[str]] = []
+    for run in runs:
+        model, separator, variant = run.partition("/")
+        if not separator or not model or not variant:
+            raise ValueError(f"invalid run {run!r}; expected MODEL/VARIANT")
+        commands.append(
+            trace_command(
+                paths,
+                model=model,
+                variant=variant,
+                dataset=dataset,
+                sample=sample,
+            )
+        )
+    return commands
+
+
+def trace_artifacts(
+    paths: PlatformPaths,
+    *,
+    model: str,
+    variant: str,
+    dataset: str,
+    sample: str,
+) -> dict[str, Path]:
+    root = (
+        paths.output_root
+        / "visualization_output"
+        / model
+        / variant
+        / dataset
+    )
+    return {
+        "accept_trace": root / f"{sample}_accept_trace.png",
+        "token_trace": root / f"{sample}_token_trace.gif",
+        "sudoku_trace": root / f"{sample}_sudoku_context_trace.gif",
+    }
+
+
+def platform_chart_command(
+    paths: PlatformPaths,
+    *,
+    section: str,
+    key: str,
+    spec: dict,
+) -> tuple[list[str], Path]:
+    safe_section = re.sub(r"[^A-Za-z0-9_.-]+", "_", section).strip("_")
+    safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", key).strip("_")
+    output_path = (
+        paths.output_root
+        / "visualization_output"
+        / "platform"
+        / safe_section
+        / f"{safe_key}.png"
+    )
+    state_dir = paths.platform_root / ".platform_state" / "chart_specs"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    spec_path = state_dir / f"{safe_section}__{safe_key}.json"
+    spec_path.write_text(
+        json.dumps({**spec, "output_path": str(output_path)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    root = paths.benchmark_root
+    root_python = root / ".venvs" / "root" / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    command = [
+        str(root_python if root_python.exists() else Path(sys.executable)),
+        str(root / "run_visualization.py"),
+        "--preset",
+        "platform-chart",
+        "--chart-spec",
+        str(spec_path),
+        "--no-report",
+    ]
+    return command, output_path
 
 
 def launch_visualization(
@@ -127,3 +245,21 @@ def launch_visualization(
     )
     handle.close()
     return process, log_path
+
+
+def run_visualization_command(
+    paths: PlatformPaths,
+    command: list[str],
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "1"
+    return subprocess.run(
+        command,
+        cwd=paths.benchmark_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )

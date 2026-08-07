@@ -102,12 +102,15 @@ def move_output_paths_to_trash(output_root: Path, targets: list[Path]) -> int:
         )
         entry_dir = trash_root / entry_id
         entry_dir.mkdir(parents=True, exist_ok=False)
-        payload = entry_dir / "payload"
+        payload = entry_dir / (
+            f"payload{target.suffix.lower()}" if target.is_file() else "payload"
+        )
         manifest = {
             "id": entry_id,
             "original_relative_path": relative.as_posix(),
             "deleted_at": datetime.now(timezone.utc).isoformat(),
             "kind": "directory" if target.is_dir() else "file",
+            "payload_name": payload.name,
         }
         try:
             shutil.move(str(target), str(payload))
@@ -125,6 +128,36 @@ def move_output_paths_to_trash(output_root: Path, targets: list[Path]) -> int:
     return moved
 
 
+def permanently_delete_output_paths(output_root: Path, targets: list[Path]) -> int:
+    """Permanently remove selected paths while keeping deletion inside output_root."""
+    root = output_root.resolve()
+    removed = 0
+    parents: set[Path] = set()
+    seen: set[Path] = set()
+    for candidate in targets:
+        target = candidate.resolve()
+        if target in seen or target == root or root not in target.parents:
+            continue
+        seen.add(target)
+        if not target.exists():
+            continue
+        parents.add(target.parent)
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        removed += 1
+    for parent in sorted(parents, key=lambda item: len(item.parts), reverse=True):
+        current = parent
+        while current != root and root in current.parents:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+    return removed
+
+
 def list_trash_entries(
     output_root: Path,
     *,
@@ -137,12 +170,14 @@ def list_trash_entries(
         return entries
     for entry_dir in trash_root.iterdir():
         manifest_path = entry_dir / "manifest.json"
-        payload = entry_dir / "payload"
-        if not entry_dir.is_dir() or not manifest_path.is_file() or not payload.exists():
+        if not entry_dir.is_dir() or not manifest_path.is_file():
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            continue
+        payload = _trash_payload(entry_dir, manifest)
+        if not payload.exists():
             continue
         relative = str(manifest.get("original_relative_path", ""))
         if prefixes and not any(
@@ -156,6 +191,7 @@ def list_trash_entries(
                 "original_relative_path": relative,
                 "deleted_at": str(manifest.get("deleted_at", "")),
                 "kind": str(manifest.get("kind", "file")),
+                "payload_name": payload.name,
             }
         )
     return sorted(entries, key=lambda item: item["deleted_at"], reverse=True)
@@ -168,8 +204,8 @@ def restore_trash_entry(output_root: Path, entry_id: str) -> Path:
     if trash_root not in entry_dir.parents:
         raise ValueError("Trash entry must stay inside the recycle bin.")
     manifest_path = entry_dir / "manifest.json"
-    payload = entry_dir / "payload"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = _trash_payload(entry_dir, manifest)
     target = (root / str(manifest["original_relative_path"])).resolve()
     if root not in target.parents:
         raise ValueError("Restore target must stay inside the output directory.")
@@ -222,6 +258,15 @@ def _stage_root(paths: PlatformPaths, stage: str) -> Path:
     if stage not in OUTPUT_STAGES:
         raise ValueError(f"Unsupported output stage: {stage}")
     return (paths.output_root / stage).resolve()
+
+
+def _trash_payload(entry_dir: Path, manifest: dict | None = None) -> Path:
+    payload_name = str((manifest or {}).get("payload_name") or "payload")
+    preferred = entry_dir / payload_name
+    if preferred.exists():
+        return preferred
+    candidates = sorted(entry_dir.glob("payload*"))
+    return candidates[0] if candidates else preferred
 
 
 def _target(paths: PlatformPaths, stage: str, *parts: str) -> Path:

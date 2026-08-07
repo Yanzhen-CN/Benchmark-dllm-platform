@@ -6,7 +6,9 @@ from pathlib import Path
 
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BENCHMARK_ROOT = PLATFORM_ROOT.parent / "Benchmark-dllm"
+
+
+DEFAULT_BENCHMARK_ROOT = PLATFORM_ROOT.parent
 
 
 @dataclass(frozen=True)
@@ -53,4 +55,3 @@ class PlatformPaths:
 
     def is_ready(self) -> bool:
         return self.launcher.is_file() and self.models_dir.is_dir()
-

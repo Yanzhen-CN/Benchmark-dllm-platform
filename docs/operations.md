@@ -5,17 +5,19 @@ It discovers models and datasets from the benchmark configuration, reads public
 score and visualization outputs, and submits work through the benchmark's
 existing runner. It never loads a model inside the Streamlit environment.
 
-## Local service
+## Local network service
 
     python start.py
 
-The default service listens only on 127.0.0.1:8501.
+The default service listens on `0.0.0.0:8501`. This device can use
+`http://127.0.0.1:8501`; another device on the same trusted Wi-Fi or Ethernet
+network should use the LAN address printed by `start.py`.
 
-## Remote service
+## Custom host or port
 
-Set DLLM_PLATFORM_HOST=0.0.0.0 and optionally DLLM_PLATFORM_PORT before
-starting the platform. Expose the selected port only through a firewall or an
-authenticated reverse proxy.
+Set `DLLM_PLATFORM_HOST` or `DLLM_PLATFORM_PORT` before starting the platform
+to override the defaults. Do not expose this unauthenticated service directly
+to the public internet.
 
 Linux:
 
@@ -26,6 +28,7 @@ PowerShell:
     $env:DLLM_PLATFORM_HOST = "0.0.0.0"
     $env:DLLM_PLATFORM_PORT = "8501"
     python start.py
+
 
 ## Execution boundary
 

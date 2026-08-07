@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,22 @@ VENV_PYTHON = (
 )
 STATE_DIR = ROOT / ".state"
 PID_FILE = STATE_DIR / "platform.pid"
+
+
+def local_network_address() -> str | None:
+    """Return a usable IPv4 address for another device on the local network."""
+
+    try:
+        addresses = socket.getaddrinfo(
+            socket.gethostname(), None, family=socket.AF_INET
+        )
+    except OSError:
+        return None
+    for address in addresses:
+        ip = address[4][0]
+        if not ip.startswith("127."):
+            return ip
+    return None
 
 
 def _run(command: list[str]) -> None:
@@ -89,7 +106,7 @@ def forget_platform(pid: int) -> None:
 def main() -> int:
     stop_previous_platform()
     ensure_platform_runtime()
-    host = os.environ.get("DLLM_PLATFORM_HOST", "127.0.0.1")
+    host = os.environ.get("DLLM_PLATFORM_HOST", "0.0.0.0")
     port = os.environ.get("DLLM_PLATFORM_PORT", "8501")
     command = [
         str(VENV_PYTHON),
@@ -101,10 +118,23 @@ def main() -> int:
         f"--server.port={port}",
         *sys.argv[1:],
     ]
-    display_host = "localhost" if host in {"127.0.0.1", "0.0.0.0"} else host
-    print(f"Benchmark-dllm Platform: http://{display_host}:{port}")
     if host == "0.0.0.0":
-        print("Remote mode enabled; protect this port with your server firewall or proxy authentication.")
+        print(f"Benchmark-dllm Platform (this device): http://127.0.0.1:{port}")
+        network_address = local_network_address()
+        if network_address:
+            print(
+                "Benchmark-dllm Platform (other devices): "
+                f"http://{network_address}:{port}"
+            )
+        else:
+            print(
+                "Benchmark-dllm Platform (other devices): "
+                f"http://<this-device-LAN-IP>:{port}"
+            )
+        print("LAN mode enabled; use only on a trusted network.")
+    else:
+        display_host = "localhost" if host == "127.0.0.1" else host
+        print(f"Benchmark-dllm Platform: http://{display_host}:{port}")
     process = subprocess.Popen(
         command,
         cwd=ROOT,
